@@ -33,7 +33,7 @@ export function render(root, ctx) {
     const dots = weekDots(sessions, now);
     const tip = tipOfDay(content.tips, now);
     const nudge = !resume && needsNudge(sessions, now);
-    const exportHint = needsExportHint(data.settings, now);
+    const exportHint = needsExportHint(data.settings, now, data.state);
     const installHint = !isStandalone() && !data.state?.installHintDismissed;
     const light = pain == null ? null : lightFor(pain);
 

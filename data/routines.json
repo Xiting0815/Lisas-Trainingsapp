@@ -1,1 +1,63 @@
-{}
+{
+  "version": 1,
+  "reset": {
+    "name": "Nacken-Reset",
+    "minutes": 2,
+    "intro": "Zwei Minuten im Stehen, ohne Geräte – kannst du überall machen, auch bei der Arbeit.",
+    "items": [
+      {
+        "exerciseId": "chin-tuck-wall",
+        "reps": 4,
+        "sets": 1
+      },
+      {
+        "exerciseId": "shrug-drop",
+        "reps": 3,
+        "sets": 1
+      },
+      {
+        "exerciseId": "scapula-setting",
+        "reps": 2,
+        "seconds": 6,
+        "sets": 1
+      },
+      {
+        "exerciseId": "pec-stretch-low",
+        "seconds": 12,
+        "sets": 1
+      },
+      {
+        "exerciseId": "belly-breathing",
+        "seconds": 30,
+        "sets": 1
+      }
+    ]
+  },
+  "evening": {
+    "name": "Abend-Entspannung",
+    "minutes": 5,
+    "intro": "Fünf Minuten nur für dich: Wärme, sanftes Dehnen und ruhige Atmung.",
+    "items": [
+      {
+        "exerciseId": "warmth-relax",
+        "seconds": 110,
+        "sets": 1
+      },
+      {
+        "exerciseId": "neck-stretch-low",
+        "seconds": 15,
+        "sets": 1
+      },
+      {
+        "exerciseId": "child-pose-breath",
+        "seconds": 35,
+        "sets": 1
+      },
+      {
+        "exerciseId": "breathing-reset",
+        "seconds": 40,
+        "sets": 1
+      }
+    ]
+  }
+}

@@ -217,7 +217,7 @@ function wireStoreNotices(store) {
 
   // Beschädigte Daten: das Store-Modul hat eine Kopie unter lisa.v1.corrupt-<ts> abgelegt
   try {
-    const issues = store.loadIssues?.();
+    const issues = store.getIssues?.();
     if (issues?.corrupt) {
       showNotice('corrupt', {
         tone: 'error',

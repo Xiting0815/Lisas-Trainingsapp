@@ -195,13 +195,13 @@ export function render(root, ctx) {
     const cue = timerPlanFor(it, ex);
     if (timer && cue.length && planSeconds(cue) > 0) timer.plan = cue;
     else if (timer) { timer.remove(); timer = null; }
-    timer?.addEventListener('tick', setCta);
+    timer?.addEventListener('tick', () => setTimeout(setCta, 0));
     timer?.addEventListener('done', () => {
       const next = active.plan.items[active.index + 1];
       const nextName = next ? exOf(next.exerciseId)?.name : '';
       say(nextName ? `Übung geschafft. Als Nächstes: ${nextName}` : 'Übung geschafft. Das war die letzte Übung.', { priority: 'high', interrupt: true, cue: 'exercise-done' });
-      setCta();
-      root.querySelector('#cta')?.focus({ preventScroll: true });
+      // das Timer-Element malt seinen Zustand erst nach dem Ereignis
+      setTimeout(() => { setCta(); root.querySelector('#cta')?.focus({ preventScroll: true }); }, 0);
     });
     setCta();
     window.scrollTo(0, 0);
@@ -289,9 +289,8 @@ export function render(root, ctx) {
       if (active.rowed) session.rowWarmup = true;
       store.update((d) => {
         const next = applyTrainingResult(d, session, now);
-        d.sessions = next.sessions;
-        d.state = next.state;
-        d.state.activeSession = null;
+        next.state.activeSession = null;
+        return next;
       });
       const id = session.id;
       active = null;

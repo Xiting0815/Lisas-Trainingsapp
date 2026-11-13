@@ -1,1 +1,180 @@
-{"tips":[]}
+{
+  "version": 1,
+  "tips": [
+    {
+      "id": "tip-01",
+      "topic": "handtasche",
+      "title": "Tasche wechseln",
+      "text": "Trag deine Handtasche mal links, mal rechts. So bekommen beide Schultern abwechselnd eine Pause.",
+      "icon": "👜"
+    },
+    {
+      "id": "tip-02",
+      "topic": "handtasche",
+      "title": "Leichter unterwegs",
+      "text": "Schau heute kurz in deine Tasche: Was brauchst du wirklich? Jedes Teil weniger entlastet deinen Nacken.",
+      "icon": "🎒"
+    },
+    {
+      "id": "tip-03",
+      "topic": "handtasche",
+      "title": "Quer über den Körper",
+      "text": "Hänge den Gurt quer über den Körper, dann verteilt sich das Gewicht und die Schulter muss nicht ziehen.",
+      "icon": "💼"
+    },
+    {
+      "id": "tip-04",
+      "topic": "handtasche",
+      "title": "Rucksack mit zwei Trägern",
+      "text": "Ein Rucksack mit beiden Trägern verteilt das Gewicht auf beide Seiten. Dein Rücken wird es dir danken.",
+      "icon": "🎒"
+    },
+    {
+      "id": "tip-05",
+      "topic": "buecken",
+      "title": "Aus der Hüfte beugen",
+      "text": "Beim Bücken schiebst du den Po nach hinten und beugst die Beine leicht, statt im Hohlkreuz nach unten zu gehen.",
+      "icon": "🧺"
+    },
+    {
+      "id": "tip-06",
+      "topic": "buecken",
+      "title": "Bauch leicht anspannen",
+      "text": "Spann beim Bücken den Bauch ganz leicht an, als würdest du dich kurz größer machen. So bleibt der Rücken schön lang.",
+      "icon": "🧺"
+    },
+    {
+      "id": "tip-07",
+      "topic": "buecken",
+      "title": "Nah an die Last",
+      "text": "Stell dich nah an das, was du aufhebst. Je näher es am Körper ist, desto leichter fällt es dem Rücken.",
+      "icon": "📦"
+    },
+    {
+      "id": "tip-08",
+      "topic": "wischen",
+      "title": "Mit den Beinen wischen",
+      "text": "Beim Wischen und Saugen stehst du in Schrittstellung und verlagerst dein Gewicht, statt nur mit den Armen zu arbeiten.",
+      "icon": "🧹"
+    },
+    {
+      "id": "tip-09",
+      "topic": "wischen",
+      "title": "Stiel auf deine Größe",
+      "text": "Ein Stiel, der lang genug ist, lässt dich aufrecht arbeiten. Dann bleibt der Rücken gerade und der Nacken locker.",
+      "icon": "🧹"
+    },
+    {
+      "id": "tip-10",
+      "topic": "wischen",
+      "title": "Wechseln ist erlaubt",
+      "text": "Wechsle beim Saugen die Seite, mal rechts, mal links. Dann wird nicht immer dieselbe Schulter beansprucht.",
+      "icon": "🌀"
+    },
+    {
+      "id": "tip-11",
+      "topic": "ueberkopf",
+      "title": "Tritt statt Strecken",
+      "text": "Für Arbeiten über dem Kopf holst du dir lieber einen Tritt oder eine kleine Leiter. Dann kannst du die Schultern unten lassen.",
+      "icon": "🪜"
+    },
+    {
+      "id": "tip-12",
+      "topic": "ueberkopf",
+      "title": "Kleine Pausen oben",
+      "text": "Wenn du über Kopf arbeitest, lass zwischendurch die Arme sinken und schüttel sie locker aus. Das tut den Schultern gut.",
+      "icon": "🙌"
+    },
+    {
+      "id": "tip-13",
+      "topic": "ueberkopf",
+      "title": "Schultern unten lassen",
+      "text": "Achte beim Arbeiten über dem Kopf kurz darauf, die Schultern weit weg von den Ohren zu lassen. Ein kurzer Check genügt.",
+      "icon": "💗"
+    },
+    {
+      "id": "tip-14",
+      "topic": "tragen",
+      "title": "Lasten aufteilen",
+      "text": "Zwei leichtere Taschen sind besser als eine schwere. Verteile das Gewicht auf beide Hände.",
+      "icon": "🛍️"
+    },
+    {
+      "id": "tip-15",
+      "topic": "tragen",
+      "title": "Nah am Körper",
+      "text": "Trag Wäschekorb und Einkäufe nah am Körper. So muss dein Rücken weniger halten.",
+      "icon": "🧺"
+    },
+    {
+      "id": "tip-16",
+      "topic": "tragen",
+      "title": "Zweimal gehen",
+      "text": "Du darfst ruhig zweimal gehen. Dein Nacken und dein Rücken freuen sich über jede Erleichterung.",
+      "icon": "🚶‍♀️"
+    },
+    {
+      "id": "tip-17",
+      "topic": "mikropause",
+      "title": "30 Sekunden pro Stunde",
+      "text": "Einmal pro Stunde 30 Sekunden Schultern kreisen und das Kinn zurückschieben. Das ist wie ein kleiner Nacken-Reset.",
+      "icon": "⏰"
+    },
+    {
+      "id": "tip-18",
+      "topic": "mikropause",
+      "title": "Der Nacken-Reset",
+      "text": "Wenn dein Nacken sich meldet, probier den Nacken-Reset aus der App. In zwei Minuten und im Stehen kannst du ihn fast überall machen.",
+      "icon": "🔄"
+    },
+    {
+      "id": "tip-19",
+      "topic": "mikropause",
+      "title": "Tief durchatmen",
+      "text": "Zwischen zwei Aufgaben drei tiefe Atemzüge in den Bauch. Das sind nur 30 Sekunden und sie beruhigen sofort.",
+      "icon": "🌬️"
+    },
+    {
+      "id": "tip-20",
+      "topic": "mikropause",
+      "title": "Kurz aufrichten",
+      "text": "Stell dir einen Faden vor, der dich am Scheitel sanft nach oben zieht. Schon wirst du ein Stück größer und der Nacken länger.",
+      "icon": "🧵"
+    },
+    {
+      "id": "tip-21",
+      "topic": "abend",
+      "title": "Wärme am Abend",
+      "text": "Ein Wärmekissen im Nacken am Abend ist wie eine kleine Umarmung. Gönn dir zehn Minuten damit.",
+      "icon": "🔥"
+    },
+    {
+      "id": "tip-22",
+      "topic": "abend",
+      "title": "Bildschirm auf Augenhöhe",
+      "text": "Halte dein Handy und deinen Bildschirm möglichst auf Augenhöhe. Dann muss der Kopf nicht nach unten hängen.",
+      "icon": "📱"
+    },
+    {
+      "id": "tip-23",
+      "topic": "abend",
+      "title": "Das Kissen nicht zu hoch",
+      "text": "Ein zu hohes Kissen drückt den Kopf nach vorn. Schau mal, ob dein Nacken beim Liegen eine gerade Linie bildet.",
+      "icon": "🛏️"
+    },
+    {
+      "id": "tip-24",
+      "topic": "abend",
+      "title": "Ruhig in den Abend",
+      "text": "Eine ruhige Atmung vor dem Einschlafen hilft dem Körper loszulassen. Das lange Ausatmen ist dabei dein bester Freund.",
+      "icon": "🌙"
+    },
+    {
+      "id": "tip-25",
+      "topic": "abend",
+      "title": "Sei lieb zu dir",
+      "text": "Nach einem langen Tag mit vielen Aufgaben darfst du dich auch mal hinlegen und nichts tun. Das ist ein Teil der Erholung.",
+      "icon": "💗"
+    }
+  ]
+}

@@ -2,7 +2,7 @@
 // Renders the PWA icons from icons/icon.svg with Playwright (dev-only tool; not part of the app).
 //   node tools/gen-icons.mjs
 // Produces:
-//   icons/icon-maskable.svg      full-bleed variant, artwork inside the 80 % safe zone
+//   icons/icon-maskable.svg      full-bleed variant, Herz mit Figur, innerhalb der 80-%-Safe-Zone
 //   icons/icon-192.png, icon-512.png            (purpose "any", transparent rounded corners)
 //   icons/icon-maskable-192.png, icon-maskable-512.png  (purpose "maskable")
 //   icons/apple-touch-icon.png   180×180, full-bleed (iOS rounds it itself)
@@ -27,7 +27,7 @@ const svg = await readFile(path.join(iconsDir, 'icon.svg'), 'utf8');
 // Maskable: square background, artwork scaled into the safe zone (circle r = 40 % of size).
 const maskable = svg
   .replace(/rx="112"/g, 'rx="0"')
-  .replace('<g id="art">', '<g id="art" transform="translate(256 256) scale(0.84) translate(-272 -240)">');
+  .replace('<g id="art">', '<g id="art" transform="translate(256 256) scale(0.8) translate(-256 -256)">');
 await writeFile(path.join(iconsDir, 'icon-maskable.svg'), maskable);
 
 const targets = [

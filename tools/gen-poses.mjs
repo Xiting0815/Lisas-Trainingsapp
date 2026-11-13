@@ -1734,12 +1734,12 @@ add('band-dislocate-high', ground(front('standing', { shoulderL: 158, shoulderR:
       const hipX = KX - Math.sin(60 * RAD) * SEG.thigh;
       const p = side('lying', { root: { x: r1(hipX), y: r1(hipY) }, trunk, headTilt: tilt, hipL: 60, hipR: 60, kneeL: 150, kneeR: 150, shoulderL: 90, shoulderR: 90, elbowL: 0, elbowR: 0, ankleL: 90, ankleR: 90 });
       const P = pts(p);
-      for (const s of ['L', 'R']) aim(p, 'arm' + s, { x: P.neck.x + 50, y: MAT - 3.25 }, (j2) => j2 >= -2);
+      for (const s of ['L', 'R']) aim(p, 'arm' + s, { x: P.neck.x + 50, y: MAT - 3.25 }, (j2, e) => e.y < (P.neck.y + MAT) / 2);
       p.props = ['mat'];
       return p;
     };
-    add('child-out', mk(104, 18));
-    add('child-in', mk(96, 14));
+    add('child-out', mk(102, 4));
+    add('child-in', mk(95, 6));
   }
   // ---- Offenes Buch in Seitlage (Vorderansicht): oberer Arm öffnet sich
   {
@@ -1781,7 +1781,7 @@ add('band-dislocate-high', ground(front('standing', { shoulderL: 158, shoulderR:
     const mk = (lift) => {
       const p = lieHook({ shoulderL: 90, shoulderR: 90, elbowL: 5, elbowR: 5 });
       const P = pts(p);
-      for (const s of ['L', 'R']) aim(p, 'arm' + s, { x: P.hip.x - 9, y: P.hip.y - 11 - lift }, (j2) => j2 >= 0);
+      for (const s of ['L', 'R']) aim(p, 'arm' + s, { x: P.hip.x - 9, y: P.hip.y - 11 - lift }, (j2, e) => e.y < P.hip.y - 8);
       p.props = ['mat', { type: 'cushion', x: r1(P.neck.x + 2), y: MAT - 2.5, w: 36, h: 5 }];
       return p;
     };
@@ -1815,6 +1815,20 @@ for (const p of Object.values(poses)) {
   if (p.view === 'side' && p.ground === 'lying' && p.trunk < -92) p.headTilt = r1(-90 - p.trunk);
 }
 
+// Nur Posen behalten, die eine Übung (data/exercises.json + data/figure-overrides.json) verwendet.
+{
+  const { readFileSync, existsSync } = await import('node:fs');
+  const exFile = `${repo}/data/exercises.json`;
+  if (existsSync(exFile)) {
+    const used = new Set();
+    const take = (f) => { for (const id of f?.poses || []) if (typeof id === 'string') used.add(id); };
+    const ovFile = `${repo}/data/figure-overrides.json`;
+    const ov = existsSync(ovFile) ? JSON.parse(readFileSync(ovFile, 'utf8')).overrides || {} : {};
+    for (const e of JSON.parse(readFileSync(exFile, 'utf8')).exercises) { take(e.figure); take(ov[e.id]); }
+    for (const id of Object.keys(poses)) if (!used.has(id)) delete poses[id];
+    for (const id of used) if (!poses[id]) console.warn('FEHLT: Pose', id);
+  }
+}
 const out = { version: 1, segments: { trunk: 50, thigh: 42, shin: 42, upperArm: 30, forearm: 28, head: 10, foot: 10 }, poses };
 writeFileSync(`${repo}/data/poses.json`, formatJson(out));
 console.log(Object.keys(poses).length, 'poses');
