@@ -34,8 +34,6 @@
 // Figure option `loop: true`: keyframes play as a cycle (k0 → … → kn-1 → k0) instead of ping-pong; the first
 //   half of the segments uses the concentric time, the rest the eccentric time (e.g. rowing drive/recovery).
 import { getExercise, getContent, loadContent } from '../content.js';
-import { getSettings, getState } from '../store.js';
-import { levelOf } from '../logic/progression.js';
 
 const Base = globalThis.HTMLElement ?? class {};
 const RAD = Math.PI / 180;
@@ -274,12 +272,10 @@ function loopAt(keyframes, con, pause, ecc, ms) {
   return run(ecc, half, n - half);
 }
 
-/** Band colour by id: settings.bands → defaults → fallback. */
+/** Band colour by id (fixed equipment: yellow, red, green, blue, loops) → fallback. */
 export function bandColor(id, bands) {
   if (!id) return null;
-  let list = bands;
-  if (!list) { try { list = getSettings()?.bands; } catch { list = null; } }
-  return list?.find?.((b) => b.id === id)?.color ?? DEFAULT_BAND_COLORS[id] ?? '#D9443B';
+  return bands?.find?.((b) => b.id === id)?.color ?? DEFAULT_BAND_COLORS[id] ?? '#D9443B';
 }
 
 // ---------------------------------------------------------------- props
@@ -1104,8 +1100,8 @@ export const FIGURE_CSS = `
   pt-figure .fig-head{fill:currentColor;stroke:var(--fig-bg);stroke-width:2.5}
   pt-figure .fig-far{opacity:.5}
   pt-figure .fig-far.fig-hl{opacity:.8}
-  pt-figure .fig-hl{color:var(--fig-hl,var(--primary,#0E7C86))}
-  pt-figure .fig-knee-hl{fill:none;stroke:var(--fig-hl,var(--primary,#0E7C86));stroke-width:2.5;opacity:.9}
+  pt-figure .fig-hl{color:var(--fig-hl,var(--primary,#A61E4D))}
+  pt-figure .fig-knee-hl{fill:none;stroke:var(--fig-hl,var(--primary,#A61E4D));stroke-width:2.5;opacity:.9}
   pt-figure .fig-prop{color:var(--fig-prop,var(--muted,#5B6573))}
   pt-figure .fig-prop-line{fill:none;stroke:currentColor;stroke-width:3;stroke-linecap:round;opacity:.75}
   pt-figure .fig-prop-solid{fill:currentColor;opacity:.75}
@@ -1113,34 +1109,34 @@ export const FIGURE_CSS = `
   pt-figure .fig-prop-soft{fill:currentColor;opacity:.16}
   pt-figure .fig-prop-ring{fill:none;stroke:currentColor;stroke-width:2.2;opacity:.6}
   pt-figure .fig-strap{fill:none;stroke:var(--fig-prop,var(--muted,#5B6573));stroke-width:1.6;stroke-linecap:round;opacity:.9}
-  pt-figure .fig-sling-strap{fill:none;stroke:var(--fig-sling,var(--accent,#E07A1F));stroke-width:2.4;stroke-linecap:round;opacity:.9}
-  pt-figure .fig-sling-handle{fill:var(--fig-sling,var(--accent,#E07A1F));stroke:var(--fig-bg);stroke-width:1.2}
+  pt-figure .fig-sling-strap{fill:none;stroke:var(--fig-sling,var(--accent,#D9467A));stroke-width:2.4;stroke-linecap:round;opacity:.9}
+  pt-figure .fig-sling-handle{fill:var(--fig-sling,var(--accent,#D9467A));stroke:var(--fig-bg);stroke-width:1.2}
   pt-figure .fig-handle{fill:var(--fig-prop,var(--muted,#5B6573));stroke:var(--fig-bg);stroke-width:1}
   pt-figure .fig-prop-wall{stroke:currentColor;stroke-width:3;stroke-linecap:round;opacity:.7}
   pt-figure .fig-prop-hatch{stroke:currentColor;stroke-width:1.4;opacity:.35;fill:none}
   pt-figure .fig-wall-bg{fill:var(--surface-2,#EEF1F4);opacity:.8}
   pt-figure .fig-knot{fill:var(--fig-prop,var(--muted,#5B6573));stroke:var(--fig-bg);stroke-width:1.5}
-  pt-figure .fig-mat{fill:var(--fig-mat,var(--primary,#0E7C86));opacity:.22}
-  pt-figure .fig-towel{fill:var(--fig-towel,var(--accent,#E07A1F));opacity:.55}
+  pt-figure .fig-mat{fill:var(--fig-mat,var(--primary,#A61E4D));opacity:.22}
+  pt-figure .fig-towel{fill:var(--fig-towel,var(--accent,#D9467A));opacity:.55}
   pt-figure .fig-towel-in{fill:none;stroke:var(--fig-bg);stroke-width:1.2;opacity:.8}
-  pt-figure .fig-cushion{fill:var(--fig-towel,var(--accent,#E07A1F));opacity:.4}
+  pt-figure .fig-cushion{fill:var(--fig-towel,var(--accent,#D9467A));opacity:.4}
   pt-figure .fig-band-out{fill:none;stroke:var(--fig-bg);stroke-width:6;stroke-linecap:round;opacity:.9}
   pt-figure .fig-band-line{fill:none;stroke:var(--band);stroke-width:3.4;stroke-linecap:round}
   pt-figure .fig-band-end{fill:var(--band)}
   pt-figure .fig-stick-rod{fill:none;stroke:var(--fig-bow,var(--muted,#5B6573));stroke-width:3;stroke-linecap:round}
-  pt-figure .fig-stick-roll{fill:var(--accent,#E07A1F);opacity:.85}
+  pt-figure .fig-stick-roll{fill:var(--accent,#D9467A);opacity:.85}
   pt-figure .fig-bow-limb{fill:none;stroke:var(--fig-bow,var(--muted,#5B6573));stroke-width:3.4;stroke-linecap:round;stroke-linejoin:round}
   pt-figure .fig-bow-string{fill:none;stroke:var(--fig-bow,var(--muted,#5B6573));stroke-width:1;opacity:.85}
-  pt-figure .fig-arrow{fill:none;stroke:var(--fig-arrow,var(--accent,#E07A1F));stroke-width:1.8;stroke-linecap:round}
+  pt-figure .fig-arrow{fill:none;stroke:var(--fig-arrow,var(--accent,#D9467A));stroke-width:1.8;stroke-linecap:round}
   pt-figure .fig-pair-arrow{fill:none;stroke:var(--muted,#5B6573);stroke-width:2.5;stroke-linecap:round;stroke-linejoin:round}
   pt-figure .fig-knee-skin{opacity:.22}
-  pt-figure .fig-patella{fill:var(--fig-hl,var(--primary,#0E7C86));stroke:var(--fig-bg);stroke-width:1.5}
+  pt-figure .fig-patella{fill:var(--fig-hl,var(--primary,#A61E4D));stroke:var(--fig-bg);stroke-width:1.5}
   pt-figure .fig-motion-halo{fill:none;stroke:var(--fig-bg);stroke-width:4.6;stroke-linecap:round;stroke-linejoin:round;opacity:.85}
-  pt-figure .fig-motion-line{fill:none;stroke:var(--fig-arrow,var(--accent,#E07A1F));stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
-  pt-figure .fig-motion-head{fill:var(--fig-arrow,var(--accent,#E07A1F));stroke:var(--fig-arrow,var(--accent,#E07A1F));stroke-width:.8;stroke-linejoin:round}
-  pt-figure .fig-motion-ring{fill:var(--fig-bg);stroke:var(--fig-arrow,var(--accent,#E07A1F));stroke-width:1.6}
+  pt-figure .fig-motion-line{fill:none;stroke:var(--fig-arrow,var(--accent,#D9467A));stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+  pt-figure .fig-motion-head{fill:var(--fig-arrow,var(--accent,#D9467A));stroke:var(--fig-arrow,var(--accent,#D9467A));stroke-width:.8;stroke-linejoin:round}
+  pt-figure .fig-motion-ring{fill:var(--fig-bg);stroke:var(--fig-arrow,var(--accent,#D9467A));stroke-width:1.6}
   pt-figure .fig-motion-layer{opacity:.9}
-  pt-figure .fig-motion-layer--alt{--fig-arrow:var(--primary,#0E7C86)}
+  pt-figure .fig-motion-layer--alt{--fig-arrow:var(--primary,#A61E4D)}
   pt-figure .fig-label{fill:var(--muted,#5B6573);font-family:var(--font,system-ui,sans-serif);font-weight:600;letter-spacing:.02em;paint-order:stroke;stroke:var(--fig-bg);stroke-width:2.4px;stroke-linejoin:round}
   pt-figure .fig-placeholder{color:var(--muted,#5B6573);text-align:center;padding:1rem}
 `;
@@ -1170,29 +1166,24 @@ export function applyFigureOverride(figure, ov) {
 }
 
 /**
- * Figure spec for an exercise (pure): figure block + highlight + band/tempo of the given level.
- * Knee block: operated (left) leg in --primary, ring on the left knee when side === "left".
- * Archery block: arms in --accent. Others: no highlight.
+ * Figure spec for an exercise (pure): the (override-merged) figure block plus highlight/tempo.
+ * `level` is ignored (kept for call compatibility); the band colour comes from the plan item via `band-id`.
  */
 export function figureSpecForExercise(ex, level = 0, overrides) {
-  const knee = ex.block === 'knee';
-  const lv = ex.levels?.[level] ?? ex.levels?.[0];
   let ov = overrides;
   if (ov === undefined) { try { ov = getContent()?.figureOverrides; } catch { ov = null; } }
   const figure = applyFigureOverride(ex.figure, ov?.[ex.id]);
-  ex = { ...ex, figure };
   return {
-    ...ex.figure,
-    highlight: ex.figure?.highlight ?? (knee ? (ex.side === 'both' ? 'legs' : ex.side === 'right' ? 'legR' : 'legL') : ex.block === 'archery' ? 'arms' : ''),
-    highlightColor: ex.block === 'archery' ? 'accent' : 'primary',
-    highlightLeftKnee: knee && ex.side === 'left',
-    bandId: lv?.band ?? ex.levels?.find((l) => l.band)?.band ?? null,
-    tempo: lv?.tempo ?? ex.figure?.tempo ?? null,
+    ...figure,
+    highlight: figure?.highlight ?? '',
+    highlightColor: 'primary',
+    bandId: figure?.band?.id ?? null,
+    tempo: figure?.tempo ?? null,
   };
 }
 
 const parseJSON = (s, d) => { if (s == null || s === '') return d; try { return JSON.parse(s); } catch { return d; } };
-const HL_COLORS = { primary: 'var(--primary,#0E7C86)', accent: 'var(--accent,#E07A1F)', petrol: 'var(--primary,#0E7C86)', orange: 'var(--accent,#E07A1F)' };
+const HL_COLORS = { primary: 'var(--primary,#A61E4D)', accent: 'var(--accent,#D9467A)' };
 
 export class PtFigure extends Base {
   static get observedAttributes() {
@@ -1228,9 +1219,7 @@ export class PtFigure extends Base {
     if (id) {
       const ex = getExercise(id);
       if (!ex) return null;
-      let lvl = parseInt(this.getAttribute('level'), 10);
-      if (!Number.isInteger(lvl)) { try { lvl = levelOf(getState(), id, ex); } catch { lvl = 0; } }
-      spec = figureSpecForExercise(ex, lvl);
+      spec = figureSpecForExercise(ex);
     } else {
       spec = { poses: parseJSON(this.getAttribute('poses'), []), props: [], band: null, mirror: false };
     }

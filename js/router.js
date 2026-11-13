@@ -1,29 +1,21 @@
-// Hash router. See docs/SPEC.md §4 and §7.2.
+// Hash-Router. Routen: #/ (Heute), #/session, #/summary/<id>, #/history, #/settings, #/info, #/install.
 
-/** @type {import('./types.js').Route[]} */
+/** @type {{pattern: string, view: string, tab: string|null, title: string, hideTabs?: boolean}[]} */
 export const routes = [
-  { pattern: '/heute', view: 'today', tab: 'heute', title: 'Heute' },
-  { pattern: '/plan', view: 'plan', tab: 'plan', title: 'Plan' },
-  { pattern: '/uebungen', view: 'exercises', tab: 'uebungen', title: 'Übungen' },
-  { pattern: '/uebung/:id', view: 'exercise-detail', tab: 'uebungen', title: 'Übung' },
+  { pattern: '/', view: 'today', tab: 'heute', title: 'Heute' },
   { pattern: '/session', view: 'session', tab: null, title: 'Training', hideTabs: true },
-  { pattern: '/folgetag', view: 'next-day', tab: 'heute', title: 'Folgetag-Check' },
-  { pattern: '/verlauf', view: 'history', tab: 'verlauf', title: 'Verlauf' },
-  { pattern: '/mehr', view: 'settings', tab: 'mehr', title: 'Mehr' },
-  { pattern: '/ausruestung', view: 'equipment', tab: 'mehr', title: 'Meine Ausrüstung' },
-  // v2 (SPEC §12.12)
-  { pattern: '/eigene', view: 'custom-workouts', tab: 'plan', title: 'Eigene Workouts' },
-  { pattern: '/eigene/:id', view: 'custom-workout-edit', tab: 'plan', title: 'Eigenes Workout' },
-  { pattern: '/auswertung', view: 'insights', tab: 'verlauf', title: 'Auswertung' },
-  { pattern: '/profil', view: 'profile', tab: 'mehr', title: 'Trainingsziele' },
+  { pattern: '/summary/:id', view: 'summary', tab: 'heute', title: 'Geschafft' },
+  { pattern: '/history', view: 'history', tab: 'verlauf', title: 'Verlauf' },
+  { pattern: '/settings', view: 'settings', tab: 'einstellungen', title: 'Einstellungen' },
+  { pattern: '/info', view: 'info', tab: 'einstellungen', title: 'Gut zu wissen' },
+  { pattern: '/install', view: 'install', tab: 'einstellungen', title: 'App installieren' },
 ];
 
-export const DEFAULT_PATH = '/heute';
+export const DEFAULT_PATH = '/';
 
 /**
- * Pure route matcher.
- * @param {string} hash e.g. "#/uebung/quad-set?x=1"
- * @returns {{route: import('./types.js').Route, params: Record<string,string>, query: Record<string,string>, path: string}}
+ * Reiner Routen-Matcher.
+ * @param {string} hash z. B. "#/summary/abc?x=1"
  */
 export function matchRoute(hash) {
   let h = String(hash || '').replace(/^#/, '');
@@ -34,7 +26,7 @@ export function matchRoute(hash) {
   for (const pair of queryPart.split('&')) {
     if (!pair) continue;
     const [k, v = ''] = pair.split('=');
-    query[decodeURIComponent(k)] = decodeURIComponent(v.replace(/\+/g, ' '));
+    try { query[decodeURIComponent(k)] = decodeURIComponent(v.replace(/\+/g, ' ')); } catch { /* kaputte Kodierung ignorieren */ }
   }
   const segs = path.split('/').filter(Boolean);
   for (const route of routes) {
@@ -43,48 +35,42 @@ export function matchRoute(hash) {
     const params = {};
     let ok = true;
     for (let i = 0; i < rsegs.length; i++) {
-      if (rsegs[i].startsWith(':')) params[rsegs[i].slice(1)] = decodeURIComponent(segs[i]);
+      if (rsegs[i].startsWith(':')) { try { params[rsegs[i].slice(1)] = decodeURIComponent(segs[i]); } catch { params[rsegs[i].slice(1)] = segs[i]; } }
       else if (rsegs[i] !== segs[i]) { ok = false; break; }
     }
     if (ok) return { route, params, query, path };
   }
-  const fallback = routes.find((r) => r.pattern === DEFAULT_PATH);
-  return { route: fallback, params: {}, query, path: DEFAULT_PATH };
+  return { route: routes[0], params: {}, query, path: DEFAULT_PATH };
 }
 
-/** @param {string} path e.g. "/uebung/quad-set" */
+/** @param {string} path z. B. "/session?kind=reset" */
 export function navigate(path) {
   const target = '#' + (path.startsWith('/') ? path : '/' + path);
   if (location.hash === target) window.dispatchEvent(new HashChangeEvent('hashchange'));
   else location.hash = target;
 }
 
-/**
- * v5.1 (audit P0-3): error card with „Neu laden“; on /session additionally „Laufendes Training verwerfen“
- * (clears state.activeSession) so broken session data can never lock the app.
- * @param {HTMLElement} root @param {any} ctx @param {ReturnType<typeof matchRoute>} m
- */
+/** Fehlerkarte mit „Neu laden“; bei /session zusätzlich „Training verwerfen“, damit kaputte Daten die App nie blockieren. */
 export function renderErrorCard(root, ctx, m) {
   let hasActive = false;
-  try { hasActive = m.route.view === 'session' && !!ctx?.store?.getState?.()?.activeSession; } catch { hasActive = false; }
+  try { hasActive = m.route.view === 'session' && !!ctx?.store?.get?.()?.state?.activeSession; } catch { hasActive = false; }
   root.innerHTML = '<div class="card" role="alert"><h2>Hoppla</h2><p>Diese Seite konnte nicht geladen werden.</p>'
-    + '<div style="display:flex;flex-wrap:wrap;gap:8px">'
-    + '<button type="button" class="btn btn--primary" data-err-reload style="min-height:48px">Neu laden</button>'
-    + '<a class="btn" href="#/heute" style="min-height:48px">Zu Heute</a></div>'
-    + (hasActive ? '<p style="margin:16px 0 8px">Wenn das Training immer wieder hier hängen bleibt, kannst du es verwerfen. Dein bisheriger Verlauf bleibt erhalten.</p>'
-      + '<button type="button" class="btn btn--danger" data-err-discard style="min-height:48px">Laufendes Training verwerfen</button>' : '')
+    + '<div class="btn-row"><button type="button" class="btn btn--primary" data-err-reload>Neu laden</button>'
+    + '<a class="btn" href="#/">Zur Startseite</a></div>'
+    + (hasActive ? '<p>Bleibt das Training immer wieder hängen, kannst du es verwerfen. Dein bisheriger Verlauf bleibt erhalten.</p>'
+      + '<button type="button" class="btn btn--danger" data-err-discard>Training verwerfen</button>' : '')
     + '</div>';
   root.querySelector('[data-err-reload]')?.addEventListener('click', () => location.reload());
   root.querySelector('[data-err-discard]')?.addEventListener('click', () => {
-    const ok = typeof window.confirm === 'function' ? window.confirm('Laufendes Training wirklich verwerfen? Die Sätze dieses Trainings gehen verloren.') : true;
+    const ok = typeof window.confirm === 'function' ? window.confirm('Das laufende Training wirklich verwerfen?') : true;
     if (!ok) return;
     try { ctx.store.update((d) => { d.state.activeSession = null; }); } catch (e) { console.error(e); }
-    navigate('/heute');
+    navigate('/');
   });
 }
 
 /**
- * @param {{root: HTMLElement, ctx: Omit<import('./types.js').ViewContext,'params'|'query'>, onRoute?: (m: ReturnType<typeof matchRoute>) => void}} opts
+ * @param {{root: HTMLElement, ctx: object, onRoute?: (m: ReturnType<typeof matchRoute>) => void}} opts
  */
 export function startRouter({ root, ctx, onRoute }) {
   let cleanup = null;
@@ -105,12 +91,12 @@ export function startRouter({ root, ctx, onRoute }) {
     try {
       const mod = await import(`./views/${m.route.view}.js`);
       if (my !== token) return;
-      document.title = `${mod.title || m.route.title} · Physio`;
+      document.title = `${mod.title || m.route.title} · Lisas Training`;
       const result = await mod.render(root, { ...ctx, params: m.params, query: m.query, navigate });
       if (my !== token) { if (typeof result === 'function') result(); return; }
       cleanup = typeof result === 'function' ? result : null;
     } catch (err) {
-      console.error('Route render failed', err);
+      console.error('Seite konnte nicht aufgebaut werden', err);
       if (my === token) renderErrorCard(root, ctx, m);
     }
     window.scrollTo(0, 0);
@@ -119,9 +105,6 @@ export function startRouter({ root, ctx, onRoute }) {
   }
 
   window.addEventListener('hashchange', handle);
-  if (!location.hash || location.hash === '#' || location.hash === '#/') {
-    history.replaceState(null, '', '#' + DEFAULT_PATH);
-  }
   handle();
   return () => window.removeEventListener('hashchange', handle);
 }

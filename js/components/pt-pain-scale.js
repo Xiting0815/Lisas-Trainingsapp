@@ -1,12 +1,12 @@
-// <pt-pain-scale value label min max kind="pain|rpe" green-max yellow-max> – event change {value}.
-// See docs/SPEC.md §7.5. Accessible radiogroup (roving tabindex, arrows/Home/End), 6 + 5 grid,
-// green → red ramp (pain) or neutral petrol (rpe), word anchors under the scale.
+// <pt-pain-scale value label min max green-max yellow-max> – event `change` {value}.
+// Big smiley/traffic-light scale 0–10 for the neck pain (6 + 5 grid, ≥ 56 px high buttons, accessible radiogroup with
+// roving tabindex and arrow keys). Colors: sanfte Ampel – 0–3 grün, 4–6 gelb, 7–10 rot (matches logic/traffic.js).
 import { escape } from '../render.js';
 
 const Base = globalThis.HTMLElement ?? class {};
 
-/** Color class for a pain value (default thresholds). */
-export function painClass(v, greenMax = 2, yellowMax = 5) {
+/** Color class for a pain value (default thresholds = traffic light of the logic layer). */
+export function painClass(v, greenMax = 3, yellowMax = 6) {
   if (v == null) return '';
   return v <= greenMax ? 'is-green' : v <= yellowMax ? 'is-yellow' : 'is-red';
 }
@@ -15,27 +15,26 @@ export function painClass(v, greenMax = 2, yellowMax = 5) {
 export function painWord(v) {
   if (v == null) return '';
   if (v === 0) return 'kein Schmerz';
-  if (v <= 2) return 'leicht';
-  if (v <= 5) return 'mäßig';
-  if (v <= 7) return 'stark';
+  if (v <= 3) return 'leicht';
+  if (v <= 6) return 'mittel';
+  if (v <= 8) return 'stark';
   return 'sehr stark';
 }
 
-/** German word for an RPE value 1–10. */
-export function rpeWord(v) {
+/** Face for a pain value. */
+export function painFace(v) {
   if (v == null) return '';
-  if (v <= 2) return 'sehr leicht';
-  if (v <= 4) return 'leicht';
-  if (v <= 6) return 'mittel';
-  if (v <= 8) return 'schwer';
-  if (v <= 9) return 'sehr schwer';
-  return 'maximal';
+  if (v === 0) return '😊';
+  if (v <= 3) return '🙂';
+  if (v <= 6) return '😐';
+  if (v <= 8) return '😣';
+  return '😖';
 }
 
 let uid = 0;
 
 export class PtPainScale extends Base {
-  static get observedAttributes() { return ['value', 'label', 'min', 'max', 'kind', 'green-max', 'yellow-max']; }
+  static get observedAttributes() { return ['value', 'label', 'min', 'max', 'green-max', 'yellow-max']; }
 
   get value() {
     const v = this.getAttribute('value');
@@ -78,15 +77,13 @@ export class PtPainScale extends Base {
   }
 
   _range() {
-    const kind = this.getAttribute('kind') === 'rpe' ? 'rpe' : 'pain';
-    const min = Number(this.getAttribute('min') ?? (kind === 'rpe' ? 1 : 0));
-    const max = Number(this.getAttribute('max') ?? 10);
-    const greenMax = Number(this.getAttribute('green-max') ?? 2);
-    const yellowMax = Number(this.getAttribute('yellow-max') ?? 5);
-    return { min, max, kind, greenMax, yellowMax };
+    return {
+      min: Number(this.getAttribute('min') ?? 0),
+      max: Number(this.getAttribute('max') ?? 10),
+      greenMax: Number(this.getAttribute('green-max') ?? 3),
+      yellowMax: Number(this.getAttribute('yellow-max') ?? 6),
+    };
   }
-
-  _word(v) { return this._range().kind === 'rpe' ? rpeWord(v) : painWord(v); }
 
   _select(v, focus = false) {
     const changed = v !== this.value;
@@ -97,7 +94,7 @@ export class PtPainScale extends Base {
   }
 
   _sync() {
-    const { min, greenMax, yellowMax, kind } = this._range();
+    const { min, greenMax, yellowMax } = this._range();
     const cur = this.value;
     for (const b of this.querySelectorAll('button[data-v]')) {
       const v = Number(/** @type {HTMLElement} */ (b).dataset.v);
@@ -107,28 +104,24 @@ export class PtPainScale extends Base {
     }
     const out = this.querySelector('.pain-scale__current');
     if (out) {
-      out.textContent = cur == null ? 'bitte wählen' : `${cur} · ${this._word(cur)}`;
-      out.className = 'pain-scale__current ' + (kind === 'pain' && cur != null ? painClass(cur, greenMax, yellowMax) : '');
+      out.textContent = cur == null ? 'bitte antippen' : `${painFace(cur)} ${cur} · ${painWord(cur)}`;
+      out.className = 'pain-scale__current ' + (cur != null ? painClass(cur, greenMax, yellowMax) : '');
     }
   }
 
   _render() {
-    const { min, max, kind, greenMax, yellowMax } = this._range();
-    const label = this.getAttribute('label') || (kind === 'rpe' ? 'Anstrengung (RPE)' : 'Schmerz');
+    const { min, max, greenMax, yellowMax } = this._range();
+    const label = this.getAttribute('label') || 'Schmerz';
     const id = this._id || (this._id = `pps-${++uid}`);
     let btns = '';
     for (let v = min; v <= max; v++) {
-      const cls = kind === 'pain' ? painClass(v, greenMax, yellowMax) + (v > greenMax && v <= yellowMax ? ' is-mid' : '') : '';
-      btns += `<button type="button" role="radio" class="pain-scale__btn ${cls}" data-v="${v}" aria-checked="false" tabindex="-1" aria-label="${v} – ${escape(this._word(v))}">${v}</button>`;
+      btns += `<button type="button" role="radio" class="pain-scale__btn ${painClass(v, greenMax, yellowMax)}" data-v="${v}" aria-checked="false" tabindex="-1" aria-label="${v} – ${escape(painWord(v))}">${v}</button>`;
     }
-    const anchors = kind === 'rpe'
-      ? ['sehr leicht', 'mittel', 'maximal']
-      : ['kein Schmerz', 'mäßig', 'stärkster'];
-    this.innerHTML = `<div class="pain-scale pain-scale--${kind}">
-  <div class="pain-scale__head"><span class="pain-scale__label" id="${id}-l">${escape(label)}</span><span class="pain-scale__current" aria-hidden="true"></span></div>
+    this.innerHTML = `<div class="pain-scale">
+  <span class="pain-scale__label" id="${id}-l">${escape(label)}</span>
   <div class="pain-scale__buttons" role="radiogroup" aria-labelledby="${id}-l">${btns}</div>
-  <div class="pain-scale__bar" aria-hidden="true"></div>
-  <div class="pain-scale__anchors" aria-hidden="true" style="font-size:max(14px,var(--fs-sm,0.875rem))"><span>${min} ${anchors[0]}</span><span>${anchors[1]}</span><span>${anchors[2]} ${max}</span></div>
+  <div class="pain-scale__anchors" aria-hidden="true"><span>${min} = kein Schmerz</span><span>${max} = sehr stark</span></div>
+  <div class="pain-scale__current" aria-live="polite"></div>
 </div>`;
     this._built = true;
     this._sync();

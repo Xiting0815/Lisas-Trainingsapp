@@ -1,4 +1,4 @@
-// Tiny html`` tagged template with escaping. See docs/SPEC.md §7.1.
+// Winziges html`` Template mit Escaping.
 
 const ESC = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
 
@@ -13,7 +13,7 @@ export class SafeHtml {
   toString() { return this.__html; }
 }
 
-/** Mark a string as trusted markup. @param {string} str */
+/** Markiert einen String als vertrauenswürdiges Markup. @param {string} str */
 export function raw(str) {
   return new SafeHtml(String(str ?? ''));
 }
@@ -26,12 +26,7 @@ function toHtml(v) {
   return escape(v);
 }
 
-/**
- * Tagged template: interpolated values are escaped unless they are SafeHtml.
- * @param {TemplateStringsArray} strings
- * @param {...unknown} values
- * @returns {SafeHtml}
- */
+/** Interpolierte Werte werden escaped, außer sie sind SafeHtml. */
 export function html(strings, ...values) {
   let out = strings[0];
   for (let i = 0; i < values.length; i++) out += toHtml(values[i]) + strings[i + 1];

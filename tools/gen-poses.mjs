@@ -1661,6 +1661,155 @@ add('band-dislocate-high', ground(front('standing', { shoulderL: 158, shoulderR:
   add('knee-closeup-down', knee({ patellaX: 8 }));
 }
 
+// ================================================================ Lisas Trainings-App: neue Posen (Nacken, Haltung, Entspannung)
+{
+  const withProps = (p, props) => { p.props = props; return p; };
+  // ---- Kinn zurück im Sitzen (Seitenansicht): Kopf schiebt sich nach vorn → gerade zurück über die Schultern
+  {
+    const mk = (tilt) => { const p = clone(sit); p.headTilt = tilt; return p; };
+    add('sit-chin-forward', mk(26));
+    add('sit-chin-tuck', mk(0));
+  }
+  // ---- Kinn zurück im Stehen, Hinterkopf an der Wand
+  {
+    const mk = (tilt) => { const p = ground(side('standing', { shoulderL: 4, shoulderR: 4, elbowL: 12, elbowR: 12, headTilt: tilt }), FLOOR); p.props = [{ type: 'wall', x: 92 }]; return p; };
+    add('stand-wall-chin-forward', mk(28));
+    add('stand-wall-chin-tuck', mk(5));
+  }
+  // ---- Rückenlage: Kopf auf dünnem Handtuch, Knie aufgestellt
+  const lieHook = (o = {}) => {
+    const p = hook({}, ['L', 'R'], 90);
+    ground(p, MAT, ['trunk', 'head', 'legL', 'legR']);
+    Object.assign(p, o);
+    return p;
+  };
+  {
+    const mk = (tilt) => {
+      const p = lieHook({ shoulderL: 92, shoulderR: 92, elbowL: 6, elbowR: 6, headTilt: tilt });
+      const P = pts(p);
+      p.props = ['mat', { type: 'cushion', x: r1(P.head.x - 2), y: MAT - 2.5, w: 26, h: 5 }];
+      return p;
+    };
+    add('lying-chin-neutral', mk(-7));
+    add('lying-chin-tuck', mk(7));
+    add('lying-nod-start', mk(0));
+    add('lying-nod-end', mk(24));
+  }
+  // ---- Schultern hochziehen und fallen lassen (Vorderansicht; die Arme „wandern“ mit hoch)
+  {
+    const mk = (up) => ground(front('standing', { shoulderL: 7, shoulderR: 7, elbowL: 4, elbowR: 4, upperArmLenL: up ? 0.74 : 1, upperArmLenR: up ? 0.74 : 1, forearmLenL: up ? 0.82 : 1, forearmLenR: up ? 0.82 : 1 }), FLOOR);
+    add('front-shrug-down', mk(false));
+    add('front-shrug-up', mk(true));
+  }
+  // ---- Levator-Dehnung (Vorderansicht, stehend): Hand auf dem Hinterkopf, Kopf seitlich nach vorn unten
+  {
+    const mk = (tilt) => {
+      const p = ground(front('standing', { headTilt: tilt, shoulderL: 8, elbowL: 4 }), FLOOR);
+      const P = pts(p);
+      aim(p, 'armR', { x: P.head.x - 4, y: P.head.y - 10 }, (j2, e) => e.y < P.shoulderR.y + 4);
+      return p;
+    };
+    add('front-levator-start', mk(0));
+    add('front-levator-stretch', mk(-36));
+  }
+  // ---- Katze-Kuh im Vierfüßlerstand (Seitenansicht, Blick nach rechts)
+  {
+    const KNEE_X = 58;
+    const mk = (trunk, tilt) => {
+      const p = side('lying', { root: { x: KNEE_X, y: MAT - 4.25 - SEG.thigh }, trunk, headTilt: tilt, hipL: 0, hipR: 0, kneeL: 90, kneeR: 90, shoulderL: 0, shoulderR: 0, elbowL: 0, elbowR: 0, ankleL: 90, ankleR: 90 });
+      const P = pts(p);
+      for (const s of ['L', 'R']) aim(p, 'arm' + s, { x: KNEE_X + 52, y: MAT - 3.25 }, (j2) => j2 >= -2);
+      p.props = ['mat'];
+      return p;
+    };
+    add('quad-neutral', mk(76, 0));
+    add('quad-cat', mk(70, 56));
+    add('quad-cow', mk(83, -32));
+  }
+  // ---- Kindhaltung (Seitenansicht, Blick nach rechts): Gesäß Richtung Fersen, Arme lang nach vorn
+  {
+    const KX = 122;
+    const mk = (trunk, tilt) => {
+      const hipY = MAT - 4.25 - Math.cos(60 * RAD) * SEG.thigh;
+      const hipX = KX - Math.sin(60 * RAD) * SEG.thigh;
+      const p = side('lying', { root: { x: r1(hipX), y: r1(hipY) }, trunk, headTilt: tilt, hipL: 60, hipR: 60, kneeL: 150, kneeR: 150, shoulderL: 90, shoulderR: 90, elbowL: 0, elbowR: 0, ankleL: 90, ankleR: 90 });
+      const P = pts(p);
+      for (const s of ['L', 'R']) aim(p, 'arm' + s, { x: P.neck.x + 50, y: MAT - 3.25 }, (j2) => j2 >= -2);
+      p.props = ['mat'];
+      return p;
+    };
+    add('child-out', mk(104, 18));
+    add('child-in', mk(96, 14));
+  }
+  // ---- Offenes Buch in Seitlage (Vorderansicht): oberer Arm öffnet sich
+  {
+    const mk = (sh, len) => {
+      const p = legsBent(slBase({ shoulderL: sh, elbowL: 0, upperArmLenL: len, forearmLenL: len }), 0);
+      p.props = ['mat'];
+      return p;
+    };
+    add('open-book-closed', mk(100, 0.35));
+    add('open-book-open', mk(196, 1));
+  }
+  // ---- Beckenkippen in Rückenlage: Füße bleiben, das Becken kippt (Hohlkreuz ↔ flacher Rücken)
+  {
+    const a = lieHook({ shoulderL: 90, shoulderR: 90, elbowL: 5, elbowR: 5, trunk: -88 });
+    a.props = ['mat'];
+    add('lying-pelvic-arch', a);
+    const b = clone(a);
+    b.trunk = -93.5; b.root.y = r1(b.root.y - 2); b.root.x = r1(b.root.x + 0.8);
+    const P0 = pts(a);
+    aim(b, 'legL', P0.footL, (k) => k > 0); aim(b, 'legR', P0.footR, (k) => k > 0);
+    flat(b, 'L', 'R');
+    add('lying-pelvic-flat', b);
+  }
+  // ---- Massagestab im Nacken/Schulterbereich (Seitenansicht, stehend): beide Hände führen den Stab hinter dem Kopf/Nacken
+  {
+    const mk = (down) => {
+      const p = ground(side('standing', { trunk: 2, shoulderL: 30, shoulderR: 30, elbowL: 60, elbowR: 60 }), FLOOR);
+      const P = pts(p);
+      const tgt = { x: P.head.x - 9, y: P.head.y + 2 + down };
+      for (const s of ['L', 'R']) aim(p, 'arm' + s, tgt, (j2, e) => e.x > P.neck.x);
+      p.props = [{ type: 'stick', along: 'thighL' }];
+      return p;
+    };
+    add('stand-stick-low', mk(9));
+    add('stand-stick-high', mk(0));
+  }
+  // ---- Wärmekissen-Entspannung (Rückenlage, Wärme unter Nacken/Schultern, Hände am Bauch)
+  {
+    const mk = (lift) => {
+      const p = lieHook({ shoulderL: 90, shoulderR: 90, elbowL: 5, elbowR: 5 });
+      const P = pts(p);
+      for (const s of ['L', 'R']) aim(p, 'arm' + s, { x: P.hip.x - 9, y: P.hip.y - 11 - lift }, (j2) => j2 >= 0);
+      p.props = ['mat', { type: 'cushion', x: r1(P.neck.x + 2), y: MAT - 2.5, w: 36, h: 5 }];
+      return p;
+    };
+    add('lying-warm-a', mk(0));
+    add('lying-warm-b', mk(3));
+  }
+  // ---- Bauchatmung im Stehen (Seitenansicht): eine Hand am Bauch, eine an der Brust
+  {
+    const mk = (breath) => {
+      const p = ground(side('standing', { trunk: breath ? -1 : 1, shoulderL: 20, shoulderR: 20, elbowL: 60, elbowR: 60 }), FLOOR);
+      const P = pts(p);
+      aim(p, 'armR', { x: P.hip.x + 8 + breath * 1.5, y: P.hip.y - 12 }, (j2, e) => e.x < P.hip.x + 10);
+      aim(p, 'armL', { x: P.neck.x + 8 + breath * 1.5, y: P.neck.y + 14 }, (j2, e) => e.y > P.neck.y + 6);
+      return p;
+    };
+    add('stand-belly-breath-out', mk(0));
+    add('stand-belly-breath-in', mk(1));
+  }
+  // ---- Schulterblatt-Rückzug mit Loop im Stehen (Vorderansicht): Ellbogen am Körper, Hände ziehen den Loop auseinander
+  {
+    const mk = (out) => ground(front('standing', out
+      ? { shoulderL: 14, shoulderR: 14, elbowL: 80, elbowR: 80, forearmLenL: 0.95, forearmLenR: 0.95, upperArmLenL: 0.95, upperArmLenR: 0.95 }
+      : { shoulderL: 12, shoulderR: 12, elbowL: 100, elbowR: 100, forearmLenL: 0.45, forearmLenR: 0.45, upperArmLenL: 0.95, upperArmLenR: 0.95 }), FLOOR);
+    add('front-loop-retract-in', mk(false));
+    add('front-loop-retract-out', mk(true));
+  }
+}
+
 // lying with the neck lower than the hips (bridges): tilt the head back to the mat
 for (const p of Object.values(poses)) {
   if (p.view === 'side' && p.ground === 'lying' && p.trunk < -92) p.headTilt = r1(-90 - p.trunk);

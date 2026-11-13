@@ -18,7 +18,7 @@
 //   distinct fallback tone; prep phases count down "Drei, Zwei, Eins"; holds ≥ 15 s get "Noch 5 Sekunden";
 //   rests ≥ 10 s "Gleich geht's weiter" (+ spoken countdown when the step has `countdown: true`).
 //   Zero-second steps (set-done, exercise-done) carry no time and are not spoken by the timer (the session
-//   announces them). Attribute `block="knee|archery|neutral"` colors the big phase banner (.pt-timer__cue).
+//   announces them). The big phase banner (.pt-timer__cue) is colored by phase via CSS variables.
 // Methods: start(), pause(), reset(), skip(), adjust(deltaSeconds). Props: running, remaining, rep, phase, cue, plan.
 // v5.1: attribute/prop `compact` hides ±15 and „Zurücksetzen“ (automatic for breathing plans); the toggle reads
 //   „Anhalten“/„Weiter“ (not „Pause“ – that is the rest cue); meta „Wdh. x/y“ (only reps > 1) + „Satz x von y“ ≥ 20 px bold.
@@ -35,6 +35,17 @@ import { say as voiceSay, cancel as voiceCancel, unlock as voiceUnlock, countdow
 import { formatDuration } from '../util/date.js';
 
 const Base = globalThis.HTMLElement ?? class {};
+
+/**
+ * Clock of the timer. `globalThis.__lisaSpeed` (set by tests before load, e.g. 20) makes time run faster;
+ * normally it is plain Date.now().
+ */
+const CLOCK_T0 = Date.now();
+const clockNow = () => {
+  const k = Number(globalThis.__lisaSpeed) || 1;
+  const t = Date.now();
+  return k === 1 ? t : CLOCK_T0 + (t - CLOCK_T0) * k;
+};
 
 /* ------------------------------------------------------------------ pure helpers (Node-testable) */
 
@@ -253,8 +264,8 @@ const CSS = `
 :where(pt-timer) :where(.pt-timer__dial){position:relative;width:var(--pt-timer-size);aspect-ratio:1;margin:0 auto var(--s-4,16px)}
 :where(pt-timer) :where(.pt-timer__ring){width:100%;height:100%;transform:rotate(-90deg);display:block}
 :where(pt-timer) :where(.pt-timer__track){fill:none;stroke:var(--surface-2,#EEF1F4);stroke-width:8}
-:where(pt-timer) :where(.pt-timer__progress){fill:none;stroke:var(--pt-timer-color,var(--primary,#0E7C86));stroke-width:8;stroke-linecap:round;transition:stroke-dashoffset .12s linear,stroke .2s ease-out}
-:where(pt-timer[data-kind="rest"],pt-timer[data-kind="pause"],pt-timer[data-kind="setrest"]) :where(.pt-timer__progress){stroke:var(--pt-timer-rest-color,var(--accent,#E07A1F))}
+:where(pt-timer) :where(.pt-timer__progress){fill:none;stroke:var(--pt-timer-color,var(--primary,#A61E4D));stroke-width:8;stroke-linecap:round;transition:stroke-dashoffset .12s linear,stroke .2s ease-out}
+:where(pt-timer[data-kind="rest"],pt-timer[data-kind="pause"],pt-timer[data-kind="setrest"]) :where(.pt-timer__progress){stroke:var(--pt-timer-rest-color,var(--accent,#D9467A))}
 :where(pt-timer[data-state="done"]) :where(.pt-timer__progress){stroke:var(--green,#1F8A4C)}
 :where(pt-timer) :where(.pt-timer__center){position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px}
 :where(pt-timer) :where(.pt-timer__phase){font-size:var(--fs-sm,14px);font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted,#5B6573);min-height:1.2em}
@@ -268,14 +279,10 @@ const CSS = `
 pt-timer[data-adjust="off"] .pt-timer__adj{display:none}
 pt-timer[data-minimal="on"] .pt-timer__adj,pt-timer[data-minimal="on"] .pt-timer__reset{display:none}
 :where(pt-timer) :where(.pt-timer__cue){display:block;margin:0 0 var(--s-4,16px);padding:.18em .4em;border-radius:var(--radius,16px);font-size:var(--pt-cue-size,clamp(44px,14vw,80px));font-weight:900;line-height:1.08;letter-spacing:-.01em;background:var(--surface-2,#EEF1F4);color:var(--text,#14181F);transition:background-color .2s ease-out,color .2s ease-out;overflow-wrap:anywhere;hyphens:auto}
-pt-timer{--pt-cue-work:var(--block-knee,var(--primary,#0E7C86));--pt-cue-on:var(--on-primary,#fff)}
-pt-timer[block="archery"]{--pt-cue-work:var(--block-archery,var(--accent,#E07A1F));--pt-cue-on:var(--on-accent,#fff)}
-pt-timer[block="neutral"]{--pt-cue-work:var(--primary,#0E7C86);--pt-cue-on:var(--on-primary,#fff)}
+pt-timer{--pt-cue-work:var(--primary,#A61E4D);--pt-cue-on:var(--on-primary,#fff)}
 pt-timer[data-cue="prep"] .pt-timer__cue{background:var(--gold,#D4A72C);color:#14181F}
 pt-timer:is([data-cue="tense"],[data-cue="hold"],[data-cue="work"],[data-cue="rep-up"],[data-cue="rep-hold"],[data-cue="rep-down"]) .pt-timer__cue{background:var(--pt-cue-work);color:var(--pt-cue-on)}
-pt-timer{--pt-cue-breath:#2F6FD6;--pt-cue-on-breath:#fff}
-@media (prefers-color-scheme: dark){:root:not([data-theme="light"]) pt-timer{--pt-cue-breath:#8FB4F5;--pt-cue-on-breath:#0F1216}}
-:root[data-theme="dark"] pt-timer{--pt-cue-breath:#8FB4F5;--pt-cue-on-breath:#0F1216}
+pt-timer{--pt-cue-breath:var(--calm,#4C5FA8);--pt-cue-on-breath:var(--on-calm,#fff)}
 pt-timer:is([data-cue="inhale"],[data-cue="breath-hold"],[data-cue="exhale"]) .pt-timer__cue{background:var(--pt-cue-breath);color:var(--pt-cue-on-breath)}
 pt-timer:is([data-kind="inhale"],[data-kind="bhold"],[data-kind="exhale"]) .pt-timer__progress{stroke:var(--pt-cue-breath)}
 pt-timer:is([data-cue="relax"],[data-cue="switch"],[data-cue="done"]) .pt-timer__cue{background:var(--green,#1F8A4C);color:var(--on-primary,#fff)}
@@ -352,7 +359,7 @@ export class PtTimer extends Base {
     if (this._built && !this.running) this.reset();
   }
 
-  _now() { return Date.now(); }
+  _now() { return clockNow(); }
   _elapsed() { return this._accum + (this._runStart !== null ? this._now() - this._runStart : 0); }
 
   /* --- lifecycle */

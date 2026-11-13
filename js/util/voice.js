@@ -12,14 +12,12 @@
 // - Fallback: when speech is unavailable, no German voice exists, voice is disabled in the
 //   settings, or a cue expired, the `cue` (phase name) is played as a distinct tone via
 //   util/audio.js (rising = anspannen, falling = locker lassen, low = Pause, chime = fertig).
-// - Settings (store.getSettings()): sound (master: false = silent), voiceEnabled (default true),
-//   voiceRate (default 1.05), voiceVolume (default 1), beepsWithVoice (default true: a soft tick
-//   under the voice on phase changes only).
+// - Settings (store.get().settings): voice (on/off) and volume (0..1), mapped in readSettings().
 // - Limitation: Chrome may stop speaking while the app is in the background / screen locked.
 //   The timers stay correct (timestamps) and keep the screen awake with the Wake Lock API; on
 //   return they re-announce the current phase.
 // Pure factory `createVoice(env)` for Node tests; safe to import in Node (no DOM at import time).
-import { getSettings } from '../store.js';
+import { get as getData } from '../store.js';
 import { cueTone, beep, vibrate } from './audio.js';
 
 export const PRIORITY = { low: 0, normal: 1, high: 2 };
@@ -269,8 +267,12 @@ export function createVoice(env = {}) {
 
 /* ------------------------------------------------------------------ default instance */
 
+/** Lisa's settings (store `settings.voice` on/off, `settings.volume` 0..1) mapped to the voice engine's keys. */
 function readSettings() {
-  try { return getSettings() || {}; } catch { return {}; }
+  try {
+    const st = getData()?.settings || {};
+    return { sound: true, voiceEnabled: st.voice !== false, voiceVolume: st.volume, vibration: true };
+  } catch { return {}; }
 }
 
 /** Tone for a phase cue; `soft` = the quiet tick under the voice. Also the secondary vibration. */
@@ -301,7 +303,7 @@ export function cueVibrate(cue) {
 /** Test phrase for the settings button. Returns whether a German voice was used. */
 export function testVoice() {
   unlock();
-  const r = say('Hallo! So klingen die Ansagen beim Training. Anspannen – und halten.', { priority: 'high', interrupt: true, cue: 'tense' });
+  const r = say('Hallo Lisa! So klingen die Ansagen beim Training. Ganz in Ruhe – und halten.', { priority: 'high', interrupt: true, cue: 'tense' });
   return r === 'spoken';
 }
 
