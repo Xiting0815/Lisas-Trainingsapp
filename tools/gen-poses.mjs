@@ -1,0 +1,1676 @@
+// Generates data/poses.json: grounded root heights + IK helpers. Run: node gen-poses.mjs <repo>
+import { writeFileSync } from 'node:fs';
+const repo = process.argv[2];
+const { computePoints, DEFAULT_SEGMENTS: SEG, FLOOR, MAT_H, SEAT_Y, STEP_H } = await import(`${repo}/js/components/pt-figure.js`);
+const RAD = Math.PI / 180;
+const MAT = FLOOR - MAT_H + 1; // body sinks 1px into the mat
+const STEP = FLOOR - STEP_H;
+const SEAT = SEAT_Y;
+const BODY_LEG_HALF = 4.25;
+
+const KEYS = ['trunk', 'hipL', 'hipR', 'kneeL', 'kneeR', 'shoulderL', 'shoulderR', 'elbowL', 'elbowR'];
+const base = (view, ground, o = {}) => ({ view, ground, root: { x: 100, y: 100 }, trunk: 0, hipL: 0, hipR: 0, kneeL: 0, kneeR: 0, shoulderL: 0, shoulderR: 0, elbowL: 10, elbowR: 10, ...o });
+const side = (ground, o) => base('side', ground, o);
+const front = (ground, o) => base('front', ground, { elbowL: 0, elbowR: 0, hipL: 4, hipR: 4, shoulderL: 8, shoulderR: 8, ...o });
+const pts = (p) => computePoints(p, SEG);
+const clone = (p) => JSON.parse(JSON.stringify(p));
+
+/** lowest drawn y of a set of body parts */
+function lowest(p, parts = 'all') {
+  const P = pts(p);
+  const fr = p.view === 'front';
+  const c = [];
+  const put = (k, r) => c.push(P[k].y + r);
+  if (parts === 'all' || parts.includes('head')) put('head', 9.5);
+  if (parts === 'all' || parts.includes('trunk')) {
+    if (fr) for (const k of ['shoulderL', 'shoulderR', 'hipJL', 'hipJR']) put(k, 5); else { put('hip', 6.5); put('neck', 6.5); }
+  }
+  for (const s of ['L', 'R']) {
+    if (parts === 'all' || parts.includes('leg' + s)) { put('knee' + s, 4.25); put('foot' + s, 4.25); put('toe' + s, 3); }
+    if (parts === 'all' || parts.includes('arm' + s)) { put('elbow' + s, 3.25); put('hand' + s, 3.25); }
+  }
+  return Math.max(...c);
+}
+/** shift root.y so the lowest drawn point of `parts` sits on y */
+function ground(p, y, parts = 'all') { p.root.y = Math.round((p.root.y + (y - lowest(p, parts))) * 10) / 10; return p; }
+/** side view: make feet flat (sole horizontal) */
+function flat(p, ...sides) { for (const s of sides.length ? sides : ['L', 'R']) p['ankle' + s] = Math.round(p['hip' + s] - p['knee' + s]); return p; }
+const dirAng = (v) => Math.atan2(v.x, v.y) / RAD;
+const norm = (a) => { while (a > 180) a -= 360; while (a < -180) a += 360; return a; };
+
+/** 2-link IK: put hand/foot of limb at target (figure coords). pick(elbowOrKnee) chooses the solution. */
+function aim(p, limb, target, pick) {
+  const P = pts(p);
+  const s = limb.slice(-1);
+  const arm = limb.startsWith('arm');
+  const sign = p.view === 'front' ? (s === 'L' ? 1 : -1) : 1;
+  const A = arm ? P['shoulder' + s] : P['hipJ' + s];
+  const L1 = (arm ? SEG.upperArm * (p['upperArmLen' + s] ?? 1) : SEG.thigh * (p['thighLen' + s] ?? 1));
+  const L2 = (arm ? SEG.forearm * (p['forearmLen' + s] ?? 1) : SEG.shin * (p['shinLen' + s] ?? 1));
+  const v = { x: target.x - A.x, y: target.y - A.y };
+  const d = Math.min(Math.hypot(v.x, v.y), L1 + L2 - 0.01);
+  const b = dirAng(v);
+  const a = Math.acos(Math.max(-1, Math.min(1, (L1 * L1 + d * d - L2 * L2) / (2 * L1 * d)))) / RAD;
+  const sols = [b + a, b - a].map((u) => {
+    const e = { x: A.x + Math.sin(u * RAD) * L1, y: A.y + Math.cos(u * RAD) * L1 };
+    const w = dirAng({ x: target.x - e.x, y: target.y - e.y });
+    const j1 = sign * u; // shoulder / hip param
+    const j2 = arm ? norm(sign * w - j1) : norm(j1 - sign * w); // elbow / knee param
+    return { j1: Math.round(norm(j1)), j2: Math.round(j2), e };
+  });
+  const sol = sols.find((x) => pick(x.j2, x.e)) || sols[0];
+  p[(arm ? 'shoulder' : 'hip') + s] = sol.j1;
+  p[(arm ? 'elbow' : 'knee') + s] = sol.j2;
+  return p;
+}
+/** bisection on one key so that f(p) == 0 */
+function solve(p, key, lo, hi, f) {
+  for (let i = 0; i < 60; i++) {
+    const m = (lo + hi) / 2;
+    p[key] = lo; const fl = f(p);
+    p[key] = m; const fm = f(p);
+    if (Math.sign(fl) === Math.sign(fm)) lo = m; else hi = m;
+  }
+  p[key] = Math.round(((lo + hi) / 2) * 10) / 10;
+  return p;
+}
+const r1 = (n) => Math.round(n * 10) / 10;
+
+const poses = {};
+/** front view: hands on the hips, elbows pointing outward */
+function handsOnHips(p, sides = ['L', 'R']) {
+  for (const s of sides) {
+    const P = pts(p);
+    const sg = s === 'L' ? 1 : -1;
+    const hj = P['hipJ' + s];
+    aim(p, 'arm' + s, { x: hj.x + sg * 7, y: hj.y - 7 }, (j2, e) => sg * (e.x - P.hip.x) > sg * (P['shoulder' + s].x - P.hip.x));
+  }
+  return p;
+}
+const add = (id, p) => { for (const k of KEYS) p[k] = r1(p[k]); poses[id] = p; return p; };
+
+// ---------------------------------------------------------------- standing (side)
+const stand = ground(side('standing'), FLOOR);
+add('stand', stand);
+add('stand-front', ground(front('standing'), FLOOR));
+add('stand-arms-forward', ground(side('standing', { shoulderL: 90, shoulderR: 90, elbowL: 0, elbowR: 0 }), FLOOR));
+
+function squat(k) {
+  const shin = -k * 0.42;
+  const hip = k + shin;
+  const p = side('standing', { trunk: k * 0.45, hipL: hip, hipR: hip, kneeL: k, kneeR: k, shoulderL: 30 + k * 0.6, shoulderR: 30 + k * 0.6, elbowL: 10, elbowR: 10 });
+  flat(p);
+  return ground(p, FLOOR);
+}
+add('quarter-squat-30', squat(30));
+add('quarter-squat-45', squat(45));
+add('quarter-squat-60', squat(60));
+
+add('wall-sit', ground(flat(side('standing', { hipL: 90, hipR: 90, kneeL: 90, kneeR: 90, shoulderL: 35, shoulderR: 35, elbowL: 35, elbowR: 35, props: ['wall'] })), FLOOR));
+add('wall-sit-high', ground(flat(side('standing', { hipL: 38, hipR: 38, kneeL: 40, kneeR: 40, shoulderL: 20, shoulderR: 20, elbowL: 20, elbowR: 20, props: ['wall'] })), FLOOR));
+
+// chair poses
+const seatY = SEAT - 5.25;
+const sit = flat(side('sitting', { root: { x: 92, y: seatY }, trunk: -3, hipL: 90, hipR: 90, kneeL: 90, kneeR: 90, shoulderL: 22, shoulderR: 22, elbowL: 55, elbowR: 55 }));
+const chairX = sit.root.x + 2;
+sit.props = [{ type: 'chair', x: chairX, y: SEAT, facing: 1 }];
+add('sit-chair', sit);
+{
+  const p = flat(side('sitting', { root: { x: 100, y: 0 }, trunk: 42, hipL: 72, hipR: 72, kneeL: 84, kneeR: 84, shoulderL: 28, shoulderR: 28, elbowL: 25, elbowR: 25 }));
+  // feet stay where they were while sitting
+  const footX = pts(sit).footR.x;
+  ground(p, FLOOR);
+  p.root.x = r1(p.root.x + footX - pts(p).footR.x);
+  p.props = [{ type: 'chair', x: chairX, y: SEAT, facing: 1 }];
+  add('sit-to-stand-mid', p);
+  const q = clone(stand);
+  q.root.x = r1(q.root.x + footX - pts(q).footR.x);
+  q.props = [{ type: 'chair', x: chairX, y: SEAT, facing: 1 }];
+  add('sit-to-stand-end', q);
+}
+add('sit-chair-front', ground(front('sitting', { hipL: 80, hipR: 80, thighLenL: 0.25, thighLenR: 0.25, kneeL: 80, kneeR: 80, shoulderL: 12, shoulderR: 12, elbowL: -30, elbowR: -30, props: [{ type: 'chair', back: true }] }), FLOOR, ['legL', 'legR']));
+
+// seated knee extension (left leg works), seated hamstring curl
+{
+  const mk = (kL, extra = {}) => { const p = flat(side('sitting', { root: { x: 92, y: seatY }, trunk: -3, hipL: 90, hipR: 90, kneeL: kL, kneeR: 90, shoulderL: 15, shoulderR: 15, elbowL: 20, elbowR: 20, ...extra })); p.props = [{ type: 'chair', x: chairX, y: SEAT, facing: 1 }]; return p; };
+  add('seated-knee-ext-start', mk(90));
+  add('seated-knee-ext-end', mk(5));
+  add('seated-ham-curl-start', mk(25));
+  add('seated-ham-curl-end', mk(60));
+  const high = (kL) => { const p = flat(side('sitting', { root: { x: 92, y: seatY - 10 }, trunk: -3, hipL: 90, hipR: 90, kneeL: kL, kneeR: 90 - (kL - 90) * 0.4, shoulderL: 15, shoulderR: 15, elbowL: 20, elbowR: 20 })); p.props = [{ type: 'chair', x: chairX, y: SEAT - 10, facing: 1, back: false }]; return p; };
+  add('knee-pendulum-a', high(55));
+  add('knee-pendulum-b', high(115));
+}
+
+// step-up (right foot leads onto the step)
+{
+  const stepX = 128;
+  const start = side('standing', { trunk: 14, hipL: -6, hipR: 55, kneeL: 4, kneeR: 85, shoulderL: 22, shoulderR: -12, elbowL: 20, elbowR: 20 });
+  flat(start);
+  ground(start, FLOOR, ['legL']);
+  start.root.x = r1(start.root.x + stepX - pts(start).footR.x - 2);
+  aim(start, 'legR', { x: stepX - 4, y: STEP - 4.25 }, (k) => k > 0);
+  flat(start);
+  start.props = [{ type: 'step', x: stepX, w: 52 }];
+  add('step-up-start', start);
+  const end = side('standing', { trunk: 4, hipL: 50, hipR: 0, kneeL: 75, kneeR: 0, shoulderL: -10, shoulderR: 20, elbowL: 20, elbowR: 20 });
+  flat(end);
+  ground(end, STEP, ['legR']);
+  end.root.x = r1(end.root.x + stepX - pts(end).footR.x - 2);
+  end.props = [{ type: 'step', x: stepX, w: 52 }];
+  add('step-up-end', end);
+}
+// lateral step-down (front view): stance leg left on the step, right foot lowers beside it
+{
+  const mk = (drop) => {
+    const p = front('standing', { hipL: 2, hipR: 2 + drop * 0.25, kneeL: 0, kneeR: 0, thighLenL: 1 - drop * 0.012, shinLenL: 1 - drop * 0.004, shoulderL: 25, shoulderR: 25 + drop * 0.3, elbowL: 0, elbowR: 0, trunk: -drop * 0.08 });
+    ground(p, STEP, ['legL']);
+    p.props = [{ type: 'step', x: r1(pts(p).footL.x + 6), w: 44 }];
+    return p;
+  };
+  add('lateral-step-down-start', mk(0));
+  add('lateral-step-down-end', mk(18));
+}
+// single leg stance (stand on left, right knee up), star taps
+add('single-leg-stance', ground(flat(side('standing', { hipL: 0, kneeL: 3, hipR: 60, kneeR: 85, shoulderL: 15, shoulderR: 15, elbowL: 15, elbowR: 15 })), FLOOR, ['legL']));
+add('single-leg-stance-front', ground(front('standing', { hipL: 3, hipR: 4, kneeR: 4, thighLenR: 0.45, shoulderL: 30, shoulderR: 30 }), FLOOR, ['legL']));
+{
+  const tap = (dir) => {
+    const k = 22;
+    const p = side('standing', { trunk: dir === 'front' ? 10 : 25, hipL: k * 0.55, kneeL: k, shoulderL: 35, shoulderR: 35, elbowL: 10, elbowR: 10, hipR: dir === 'front' ? 35 : -30, kneeR: 3 });
+    flat(p, 'L');
+    ground(p, FLOOR, ['legL']);
+    solve(p, 'hipR', dir === 'front' ? 15 : -70, dir === 'front' ? 80 : -5, (q) => pts(q).footR.y + 4.25 - (FLOOR - 1));
+    return p;
+  };
+  add('star-tap-front', tap('front'));
+  add('star-tap-back', tap('back'));
+  const s = front('standing', { hipL: 3, kneeL: 0, thighLenL: 0.93, shoulderL: 30, shoulderR: 30, hipR: 30 });
+  ground(s, FLOOR, ['legL']);
+  solve(s, 'hipR', 10, 70, (q) => pts(q).footR.y + 4.25 - (FLOOR - 1));
+  add('star-tap-side', s);
+}
+// calf raise
+add('calf-raise-down', ground(side('standing', { shoulderL: 10, shoulderR: 10, elbowL: 15, elbowR: 15 }), FLOOR));
+add('calf-raise-up', ground(side('standing', { shoulderL: 10, shoulderR: 10, elbowL: 15, elbowR: 15, ankleL: 42, ankleR: 42 }), FLOOR));
+// lateral walk (front, mini squat), standing hip abduction (front)
+{
+  const lw = (w) => handsOnHips(ground(front('standing', { hipL: 6, hipR: w, thighLenL: 0.9, thighLenR: 0.9, trunk: 0 }), FLOOR));
+  add('lateral-walk-a', lw(6));
+  add('lateral-walk-b', lw(18));
+  const abd = (a) => handsOnHips(ground(front('standing', { hipL: 2, hipR: a, trunk: a * 0.12 }), FLOOR, ['legL']));
+  add('hip-abd-standing-start', abd(3));
+  add('hip-abd-standing-end', abd(32));
+}
+// standing hip extension holding a chair
+{
+  const mk = (e) => {
+    const p = side('standing', { trunk: 8 + e * 0.15, hipL: 0, hipR: -e, kneeR: 3, shoulderL: 22, shoulderR: 22, elbowL: 25, elbowR: 25 });
+    flat(p, 'L');
+    return ground(p, FLOOR, ['legL']);
+  };
+  const a = mk(0);
+  const hx = Math.max(pts(a).handR.x, pts(a).handL.x);
+  const chair = { type: 'chair', x: r1(hx + 18), y: SEAT, facing: 1 };
+  a.props = [chair];
+  add('hip-ext-standing-start', a);
+  const b = mk(28);
+  b.root.x = r1(b.root.x + pts(a).footL.x - pts(b).footL.x);
+  b.props = [chair];
+  add('hip-ext-standing-end', b);
+}
+// TKE (left knee, band behind knee to a door anchor in front)
+{
+  const s = side('standing', { trunk: 8, hipL: 22, kneeL: 32, hipR: 0, kneeR: 0, shoulderL: 15, shoulderR: 15, elbowL: 20, elbowR: 20 });
+  flat(s, 'L');
+  ground(s, FLOOR);
+  const e = flat(side('standing', { trunk: 3, hipL: 0, kneeL: 0, hipR: 0, kneeR: 0, shoulderL: 15, shoulderR: 15, elbowL: 20, elbowR: 20 }), 'L');
+  ground(e, FLOOR);
+  e.root.x = r1(e.root.x + pts(s).footL.x - pts(e).footL.x);
+  const door = { type: 'door', x: r1(pts(s).kneeL.x + 55), y: r1(pts(s).kneeL.y) };
+  s.props = [door]; e.props = [door];
+  add('tke-start', s);
+  add('tke-end', e);
+}
+
+// ---------------------------------------------------------------- lying (side view, supine: head left)
+const supine = (o) => side('lying', { root: { x: 112, y: 100 }, trunk: -90, hipL: 90, hipR: 90, kneeL: 0, kneeR: 0, shoulderL: 90, shoulderR: 90, elbowL: 0, elbowR: 0, ...o });
+const lie = (p) => ground(p, MAT);
+add('lying-supine', lie(supine()));
+add('lying-supine-quad', lie(supine({ hipL: 92, kneeL: -3 })));
+{
+  const relax = lie(supine({ hipL: 97, kneeL: 14, props: [{ type: 'towel', at: 'kneeL' }] }));
+  add('supine-quad-set-relax', relax);
+  const set = clone(relax); set.hipL = 94; set.kneeL = 4; set.ankleL = -12;
+  add('supine-quad-set', set);
+}
+// heel slide: left heel slides toward buttock
+function hook(o, sides = ['L', 'R'], k = 90) {
+  const p = lie(supine(o));
+  for (const s of sides) {
+    p['knee' + s] = k;
+    solve(p, 'hip' + s, 95, 175, (q) => pts(q).footL && (pts(q)['foot' + s].y + 4.25 - MAT));
+    flat(p, s);
+  }
+  return p;
+}
+add('heel-slide-start', lie(supine()));
+add('heel-slide-end', hook({}, ['L'], 105));
+add('lying-heel-slide', hook({}, ['L'], 90));
+{
+  const d = hook({}, ['R'], 90); d.hipL = 90; d.kneeL = 0;
+  add('slr-down', d); add('lying-slr-down', clone(d));
+  const u = clone(d); u.hipL = 135;
+  add('slr-up', u); add('lying-slr-up', clone(u));
+}
+// bridges
+const bridgeDown = hook({}, ['L', 'R'], 90);
+add('bridge-down', bridgeDown);
+function bridgeUp(down, opts = {}) {
+  const P0 = pts(down);
+  const footS = opts.foot || 'R';
+  const target = { neck: P0.neck, foot: P0['foot' + footS] };
+  let best = null;
+  for (let T = -150; T <= -91; T += 0.25) {
+    for (let k = 40; k <= 130; k += 0.5) {
+      const p = clone(down);
+      p.trunk = T;
+      p['hip' + footS] = -T; // shoulder-hip-knee aligned
+      p['knee' + footS] = k;
+      // place neck on the mat at the same spot
+      const P = pts(p);
+      p.root.x += target.neck.x - P.neck.x; p.root.y += target.neck.y - P.neck.y;
+      const Q = pts(p);
+      const err = Math.hypot(Q['foot' + footS].x - target.foot.x, Q['foot' + footS].y - target.foot.y);
+      if (!best || err < best.err) best = { err, p };
+    }
+  }
+  const p = best.p;
+  p.root.x = r1(p.root.x); p.root.y = r1(p.root.y);
+  flat(p, footS);
+  return p;
+}
+{
+  const up = bridgeUp(bridgeDown);
+  up.hipL = up.hipR; up.kneeL = up.kneeR; flat(up);
+  add('bridge-up', up);
+  const sl = clone(up); sl.kneeL = 0; sl.hipL = up.hipR; delete sl.ankleL;
+  add('bridge-single-leg', sl);
+  const sld = clone(bridgeDown); sld.kneeL = 0; sld.hipL = sld.hipR - 0; delete sld.ankleL;
+  add('bridge-single-leg-down', sld);
+}
+// heel on chair bridge
+{
+  const p = lie(supine({}));
+  for (const s of ['L', 'R']) {
+    p['knee' + s] = 25;
+    solve(p, 'hip' + s, 95, 175, (q) => pts(q)['foot' + s].y + 4.25 - SEAT);
+    p['ankle' + s] = 0;
+  }
+  const cx = r1(pts(p).footR.x + 4);
+  p.props = [{ type: 'chair', x: cx, y: SEAT, facing: -1 }];
+  add('bridge-heel-chair-down', p);
+  // up: neck stays, heel stays
+  const P0 = pts(p);
+  let best = null;
+  for (let T = -150; T <= -91; T += 0.25) {
+    for (let k = 15; k <= 35; k += 0.25) {
+      const q = clone(p); q.trunk = T; q.hipR = q.hipL = -T; q.kneeR = q.kneeL = k;
+      const P = pts(q); q.root.x += P0.neck.x - P.neck.x; q.root.y += P0.neck.y - P.neck.y;
+      const Q = pts(q);
+      const err = Math.hypot(Q.footR.x - P0.footR.x, Q.footR.y - P0.footR.y);
+      if (!best || err < best.err) best = { err, q };
+    }
+  }
+  best.q.root.x = r1(best.q.root.x); best.q.root.y = r1(best.q.root.y);
+  add('bridge-heel-chair-up', best.q);
+}
+// dead bug
+{
+  const s = lie(supine({ shoulderL: 180, shoulderR: 180, hipL: 180, hipR: 180, kneeL: 90, kneeR: 90, elbowL: 0, elbowR: 0 }));
+  s.ankleL = s.ankleR = 0;
+  ground(s, MAT, ['trunk', 'head']);
+  add('dead-bug-start', s);
+  const e = clone(s); e.shoulderR = 250; e.hipL = 100; e.kneeL = 5;
+  add('dead-bug-end', e);
+}
+// serratus punch (supine, arms to ceiling, protraction)
+{
+  const s = lie(supine({ shoulderL: 180, shoulderR: 180, hipL: 135, hipR: 135, kneeL: 90, kneeR: 90 }));
+  flat(s); ground(s, MAT, ['trunk', 'head']);
+  add('supine-serratus-punch-start', s);
+  const e = clone(s); e.reachL = 6; e.reachR = 6;
+  add('supine-serratus-punch-end', e);
+}
+// seated row (long sit on mat, band around feet)
+{
+  const s = side('sitting', { trunk: 2, hipL: 90, hipR: 90, kneeL: 8, kneeR: 8, shoulderL: 78, shoulderR: 78, elbowL: 0, elbowR: 0, props: ['mat'] });
+  ground(s, MAT, ['trunk', 'legL', 'legR']);
+  add('seated-row-start', s);
+  const e = clone(s); e.trunk = -4; e.shoulderL = e.shoulderR = -35; e.elbowL = e.elbowR = 115;
+  add('seated-row-end', e);
+}
+
+// ---------------------------------------------------------------- side-lying (front view, lying on the right side, head left)
+// v5.3 (shoulder impingement): the bottom (right) arm lies along the body (≈ 10°) instead of overhead – head on a cushion
+const sideLying = (o) => front('lying', { root: { x: 112, y: 100 }, trunk: -90, shoulderR: 258, elbowR: 0, shoulderL: 90, elbowL: 0, ...o });
+function legsBent(p, open = 0) {
+  const P = pts(p);
+  const kneeB = { x: P.hipJR.x + 30, y: MAT - 4.25 };
+  const footB = { x: kneeB.x + 30, y: MAT - 4.25 };
+  // bottom (right) leg: thigh & shin foreshortened (flexed toward the viewer)
+  const vt = { x: kneeB.x - P.hipJR.x, y: kneeB.y - P.hipJR.y };
+  p.thighLenR = r1(Math.hypot(vt.x, vt.y) / SEG.thigh * 100) / 100;
+  p.hipR = r1(-Math.atan2(vt.x, vt.y) / RAD);
+  p.shinLenR = r1(30 / SEG.shin * 100) / 100;
+  p.kneeR = r1(90 + p.hipR); // R (sign -1): thighA = -hipR, shinA = thighA + kneeR → shin horizontal (world 90)
+  // top (left) leg: knee lifts with `open`, foot stays on the bottom foot
+  const kneeT = { x: kneeB.x - open * 0.25, y: kneeB.y - 8 - open };
+  const footT = { x: footB.x, y: footB.y - 8 };
+  const vT = { x: kneeT.x - P.hipJL.x, y: kneeT.y - P.hipJL.y };
+  p.thighLenL = r1(Math.hypot(vT.x, vT.y) / SEG.thigh * 100) / 100;
+  p.hipL = r1(Math.atan2(vT.x, vT.y) / RAD);
+  const vS = { x: footT.x - kneeT.x, y: footT.y - kneeT.y };
+  p.shinLenL = r1(Math.hypot(vS.x, vS.y) / SEG.shin * 100) / 100;
+  p.kneeL = r1(p.hipL - Math.atan2(vS.x, vS.y) / RAD);
+  return p;
+}
+function slBase(o) {
+  const p = sideLying(o);
+  ground(p, MAT, ['trunk']);
+  return p;
+}
+{
+  const c = legsBent(slBase(), 0);
+  c.props = ['mat'];
+  add('clamshell-closed', c);
+  const o = legsBent(slBase(), 22); o.props = c.props;
+  add('clamshell-open', o);
+  const straight = (lift) => {
+    const p = slBase();
+    const P = pts(p);
+    p.hipR = -(90 - r1(Math.atan2(MAT - 4.25 - P.hipJR.y, 84) / RAD));
+    p.kneeR = 0;
+    p.hipL = r1(90 - Math.atan2(MAT - 12.5 - P.hipJL.y, 84) / RAD + lift);
+    p.kneeL = 0;
+    p.props = ['mat'];
+    return p;
+  };
+  add('side-lying-abd-down', straight(0));
+  add('side-lying-abd-up', straight(32));
+  // side-lying ER (top = left arm, elbow at the side, forearm rotates from belly to ceiling)
+  const er = (fore, len) => { const p = legsBent(slBase({ shoulderL: 90, elbowL: fore - 90, forearmLenL: len, upperArmLenL: 1 }), 0); p.props = ['mat']; return p; };
+  add('side-lying-er-start', er(0, 0.95));
+  add('side-lying-er-end', er(180, 1));
+}
+// elevated side plank (right forearm on a step, feet on the floor)
+{
+  const p = front('lying', { root: { x: 100, y: 100 }, trunk: -66, hipL: 66, hipR: -66, kneeL: 0, kneeR: 0, shoulderR: 0, elbowR: 90, shoulderL: 180, elbowL: 0 });
+  ground(p, FLOOR, ['legL', 'legR']);
+  const P = pts(p);
+  p.props = [{ type: 'step', x: r1(P.elbowR.x - 8), w: 40, top: r1(P.elbowR.y + 3.25) }];
+  add('side-plank-elevated', p);
+  const d = clone(p); d.trunk = -76; d.hipL = 80; d.hipR = -80;
+  // hips sag toward the floor; elbow stays on the step
+  d.root.x = p.root.x; d.root.y = p.root.y;
+  const Q = pts(d); d.root.x = r1(d.root.x + P.elbowR.x - Q.elbowR.x); d.root.y = r1(d.root.y + P.elbowR.y - Q.elbowR.y);
+  add('side-plank-elevated-down', d);
+}
+
+// ---------------------------------------------------------------- prone (seen from above)
+const prone = (o) => front('lying', { camera: 'top', root: { x: 100, y: 110 }, hipL: 3, hipR: 3, props: ['mat'], ...o });
+add('prone-arms-down', prone({ shoulderL: 12, shoulderR: 12 }));
+add('prone-t', prone({ shoulderL: 90, shoulderR: 90 }));
+add('prone-y', prone({ shoulderL: 135, shoulderR: 135 }));
+add('prone-w', prone({ shoulderL: 55, shoulderR: 55, elbowL: 85, elbowR: 85 }));
+add('lying-prone', ground(side('lying', { root: { x: 90, y: 100 }, trunk: 90, hipL: -90, hipR: -90, shoulderL: -90, shoulderR: -90, elbowL: 0, elbowR: 0, ankleL: 90, ankleR: 90 }), MAT));
+
+// ---------------------------------------------------------------- upper body standing
+add('front-arms-forward', ground(front('standing', { shoulderL: 22, shoulderR: 22, upperArmLenL: 0.3, upperArmLenR: 0.3, forearmLenL: 0.3, forearmLenR: 0.3, elbowL: 0, elbowR: 0 }), FLOOR));
+add('front-arms-apart', ground(front('standing', { shoulderL: 90, shoulderR: 90, upperArmLenL: 1, upperArmLenR: 1, forearmLenL: 1, forearmLenR: 1, elbowL: 0, elbowR: 0 }), FLOOR));
+add('pull-apart-start', clone(poses['front-arms-forward']));
+add('pull-apart-end', clone(poses['front-arms-apart']));
+// wall slide (front, back to the wall)
+add('wall-slide-down', ground(front('standing', { shoulderL: 75, shoulderR: 75, elbowL: 95, elbowR: 95, props: ['wall'] }), FLOOR));
+add('wall-slide-up', ground(front('standing', { shoulderL: 155, shoulderR: 155, elbowL: 15, elbowR: 15, props: ['wall'] }), FLOOR));
+// ER at 0° (right arm, band to the left side)
+add('er0-start', ground(front('standing', { shoulderL: 6, shoulderR: 6, elbowL: 0, elbowR: -90, forearmLenR: 0.9 }), FLOOR));
+add('er0-end', ground(front('standing', { shoulderL: 6, shoulderR: 6, elbowL: 0, elbowR: 75, forearmLenR: 0.8 }), FLOOR));
+// ER 90/90 (side view: upper arm toward the viewer, forearm forward → up)
+add('er9090-side-start', ground(side('standing', { shoulderR: 90, upperArmLenR: 0.18, elbowR: 0, shoulderL: 8, elbowL: 10 }), FLOOR));
+add('er9090-side-end', ground(side('standing', { shoulderR: 90, upperArmLenR: 0.18, elbowR: 90, shoulderL: 8, elbowL: 10 }), FLOOR));
+// face pull (side view)
+add('face-pull-start', ground(side('standing', { trunk: -2, shoulderL: 82, shoulderR: 82, elbowL: 0, elbowR: 0, upperArmLenL: 1, upperArmLenR: 1, hipL: -8, hipR: 8 }), FLOOR));
+add('face-pull-end', ground(side('standing', { trunk: -2, shoulderL: -95, shoulderR: -95, elbowL: -95, elbowR: -95, upperArmLenL: 0.4, upperArmLenR: 0.4, hipL: -8, hipR: 8 }), FLOOR));
+// lat pulldown (front)
+add('lat-pulldown-standing-start', ground(front('standing', { shoulderL: 160, shoulderR: 160, elbowL: 8, elbowR: 8 }), FLOOR));
+add('lat-pulldown-standing-end', ground(front('standing', { shoulderL: 55, shoulderR: 55, elbowL: 115, elbowR: 115 }), FLOOR));
+// straight-arm pulldown (side, slight hinge)
+{
+  const mk = (sh) => { const p = side('standing', { trunk: 18, hipL: 10, hipR: 10, kneeL: 18, kneeR: 18, shoulderL: sh, shoulderR: sh, elbowL: 5, elbowR: 5 }); flat(p); return ground(p, FLOOR); };
+  add('straight-arm-pulldown-start', mk(115));
+  add('straight-arm-pulldown-end', mk(-8));
+}
+// rows standing (side)
+{
+  const mk = (o) => ground(side('standing', { trunk: 3, hipL: -8, hipR: 8, ...o }), FLOOR);
+  add('row-standing-start', mk({ shoulderL: 80, shoulderR: 80, elbowL: 0, elbowR: 0 }));
+  add('row-standing-end', mk({ shoulderL: -35, shoulderR: -35, elbowL: 115, elbowR: 115 }));
+}
+// archery (front view; target to the viewer's right; bow arm = left)
+const stance = { hipL: 7, hipR: 7 };
+add('archery-stance', ground(front('standing', { ...stance, shoulderL: 8, shoulderR: 8, props: ['bow'] }), FLOOR));
+add('archery-set', ground(front('standing', { ...stance, shoulderL: 90, elbowL: 0, shoulderR: -88, elbowR: 0, upperArmLenR: 0.55, forearmLenR: 0.95, props: ['bow'] }), FLOOR));
+add('archery-full-draw', ground(front('standing', { ...stance, shoulderL: 90, elbowL: 0, shoulderR: 96, elbowR: 166, upperArmLenR: 1, forearmLenR: 1, props: ['bow'] }), FLOOR));
+add('mirror-draw-start', ground(front('standing', { ...stance, shoulderL: 90, elbowL: 0, shoulderR: -88, elbowR: 0, upperArmLenR: 0.55, forearmLenR: 0.95 }), FLOOR));
+add('mirror-draw-end', ground(front('standing', { ...stance, shoulderL: 90, elbowL: 0, shoulderR: 96, elbowR: 166, upperArmLenR: 1, forearmLenR: 1 }), FLOOR));
+add('high-row-stance-start', handsOnHips(ground(front('standing', { ...stance, shoulderL: 22, elbowL: -70, shoulderR: -85, elbowR: 0, upperArmLenR: 0.5, forearmLenR: 0.95 }), FLOOR), ['L']));
+add('high-row-stance-end', handsOnHips(ground(front('standing', { ...stance, shoulderL: 22, elbowL: -70, shoulderR: 92, elbowR: 150, upperArmLenR: 1, forearmLenR: 1 }), FLOOR), ['L']));
+// bow-arm wall push (side view, left arm forward against a wall)
+{
+  const p = ground(side('standing', { trunk: -2, shoulderL: 90, elbowL: 0, shoulderR: 5, elbowR: 15, hipL: 0, hipR: 0 }), FLOOR);
+  p.props = [{ type: 'wall', x: r1(pts(p).handL.x + 4.5), facing: -1 }];
+  add('bow-arm-wall-push', p);
+}
+// pallof press (front, band from the viewer's right)
+add('pallof-press-start', ground(front('standing', { hipL: 8, hipR: 8, kneeL: 0, kneeR: 0, shoulderL: 18, shoulderR: 18, elbowL: -112, elbowR: -112, upperArmLenL: 1, upperArmLenR: 1, forearmLenL: 0.82, forearmLenR: 0.82 }), FLOOR));
+add('pallof-press-end', ground(front('standing', { hipL: 8, hipR: 8, kneeL: 0, kneeR: 0, shoulderL: 28, shoulderR: 28, elbowL: -60, elbowR: -60, upperArmLenL: 0.35, upperArmLenR: 0.35, forearmLenL: 0.35, forearmLenR: 0.35 }), FLOOR));
+// thoracic extension over the chair backrest, hands behind the head
+{
+  const mk = (T, tilt) => {
+    const p = flat(side('sitting', { root: { x: 92, y: seatY }, trunk: T, headTilt: tilt, hipL: 90, hipR: 90, kneeL: 90, kneeR: 90 }));
+    const P = pts(p);
+    const back = { x: P.head.x - Math.cos(T * RAD) * 9, y: P.head.y - Math.sin(T * RAD) * 9 + 2 };
+    aim(p, 'armR', back, (j2, el) => el.x > P.neck.x);
+    p.shoulderL = p.shoulderR; p.elbowL = p.elbowR;
+    p.props = [{ type: 'chair', x: chairX, y: SEAT, facing: 1 }];
+    return p;
+  };
+  const st = mk(8, 18);
+  add('thoracic-ext-chair-start', st);
+  // the arms travel with the upper body: same arm angles relative to the trunk
+  const en = mk(-22, -18);
+  en.shoulderL = en.shoulderR = st.shoulderR + (-22 - 8); en.elbowL = en.elbowR = st.elbowR;
+  add('thoracic-ext-chair-end', en);
+}
+// seated rotation (front, arms crossed on the chest)
+{
+  const mk = (tw) => {
+    const p = front('sitting', { hipL: 80, hipR: 80, thighLenL: 0.25, thighLenR: 0.25, kneeL: 80, kneeR: 80, twist: tw, props: [{ type: 'chair' }] });
+    ground(p, FLOOR, ['legL', 'legR']);
+    const P = pts(p);
+    aim(p, 'armL', { x: P.shoulderR.x + 4, y: P.shoulderR.y + 10 }, (e) => e < 0);
+    aim(p, 'armR', { x: P.shoulderL.x - 4, y: P.shoulderL.y + 16 }, (e) => e < 0);
+    return p;
+  };
+  add('seated-rotation-start', mk(0));
+  add('seated-rotation-end', mk(45));
+}
+// doorway stretch (side view, forearm on the frame behind, lunge forward)
+{
+  const p = side('standing', { trunk: 10, hipL: -14, kneeL: 4, hipR: 26, kneeR: 28, shoulderR: -90, upperArmLenR: 0.4, elbowR: -90, shoulderL: 10, elbowL: 15 });
+  flat(p);
+  ground(p, FLOOR);
+  p.props = [{ type: 'door', x: r1(pts(p).handR.x - 3), y: r1(pts(p).handR.y + 10), knot: false }];
+  add('doorway-stretch', p);
+}
+
+
+// ================================================================ WP-Content requests (docs/POSE_REQUESTS.md)
+const alias = (id, src, mod) => { const p = clone(poses[src]); if (mod) mod(p); return add(id, p); };
+const atFoot = (p, ref, s = 'R') => { p.root.x = r1(p.root.x + pts(ref)['foot' + s].x - pts(p)['foot' + s].x); return p; };
+/** front view: mirror image with left/right swapped (e.g. lying on the other side) */
+function mirrorFront(p) {
+  const q = clone(p);
+  for (const k of Object.keys(p)) {
+    const m = k.match(/^(.*)([LR])$/);
+    if (m && typeof p[k] === 'number') q[m[1] + (m[2] === 'L' ? 'R' : 'L')] = p[k];
+  }
+  q.trunk = -p.trunk; if (p.twist) q.twist = -p.twist;
+  q.root = { x: 200 - p.root.x, y: p.root.y };
+  if (q.props) q.props = q.props.map((x) => (typeof x === 'object' && x.x !== undefined ? { ...x, x: 200 - x.x } : x));
+  return q;
+}
+// high sitting
+{
+  const high = (kL, kR) => {
+    const p = flat(side('sitting', { root: { x: 92, y: seatY - 12 }, trunk: 0, hipL: 90, hipR: 90, kneeL: kL, kneeR: kR, shoulderL: 8, shoulderR: 8, elbowL: 0, elbowR: 0 }));
+    p.props = [{ type: 'chair', x: chairX, y: SEAT - 12, facing: 1, back: false }, { type: 'cushion', x: chairX, y: SEAT - 15, w: 30, h: 6 }];
+    return p;
+  };
+  add('sit-high-hang', high(90, 90));
+  add('sit-high-swing', high(35, 90));
+}
+add('stand-arms-overhead', ground(side('standing', { shoulderL: 168, shoulderR: 168, elbowL: 0, elbowR: 0 }), FLOOR));
+{
+  const seated = (o) => { const p = flat(side('sitting', { root: { x: 92, y: seatY }, hipL: 90, hipR: 90, kneeL: 90, kneeR: 90, ...o })); p.props = [{ type: 'chair', x: chairX, y: SEAT, facing: 1 }]; return p; };
+  const hands = (p) => { const P = pts(p); aim(p, 'armR', { x: P.kneeR.x - 12, y: P.kneeR.y - 6 }, (e) => e >= 0); p.shoulderL = p.shoulderR; p.elbowL = p.elbowR; return p; };
+  add('sit-round-back', hands(seated({ trunk: 25, headTilt: 25 })));
+  add('sit-chest-open', seated({ trunk: -5, headTilt: -8, shoulderL: -10, shoulderR: -10, elbowL: 30, elbowR: 30 }));
+  // seated row / lat pulldown on a chair
+  add('sit-row-start', seated({ trunk: 0, shoulderL: 85, shoulderR: 85, elbowL: 0, elbowR: 0 }));
+  add('sit-row-end', seated({ trunk: -3, shoulderL: -28, shoulderR: -28, elbowL: 105, elbowR: 105 }));
+  add('sit-arms-overhead', seated({ trunk: 0, shoulderL: 165, shoulderR: 165, elbowL: 10, elbowR: 10 }));
+  add('sit-pulldown-end', seated({ trunk: -4, shoulderL: 25, shoulderR: 25, elbowL: 130, elbowR: 130 }));
+  add('sit-knee-ext', seated({ trunk: -3, kneeL: 10, shoulderL: 15, shoulderR: 15, elbowL: 20, elbowR: 20 }));
+  add('sit-leg-forward', (() => { const p = seated({ trunk: -3, hipL: 85, kneeL: 20, shoulderL: 15, shoulderR: 15, elbowL: 20, elbowR: 20 }); return p; })());
+  add('sit-knee-60', seated({ trunk: -3, hipL: 85, kneeL: 60, shoulderL: 15, shoulderR: 15, elbowL: 20, elbowR: 20 }));
+  // hamstring stretch on the front edge of the chair
+  {
+    const p = flat(side('sitting', { root: { x: 100, y: seatY }, trunk: 30, hipL: 70, kneeL: 5, hipR: 90, kneeR: 90, ankleL: -10 }));
+    solve(p, 'hipL', 50, 90, (q) => pts(q).footL.y + 4.25 - FLOOR);
+    p.ankleL = -10;
+    const P = pts(p);
+    aim(p, 'armR', { x: P.kneeR.x - 6, y: P.kneeR.y - 6 }, (e) => e >= 0);
+    p.shoulderL = p.shoulderR; p.elbowL = p.elbowR;
+    p.props = [{ type: 'chair', x: r1(p.root.x - 12), y: SEAT, facing: 1 }];
+    add('sit-hamstring-stretch', p);
+  }
+  // hands behind head (thoracic extension over the backrest)
+  alias('sit-hands-head', 'thoracic-ext-chair-start');
+  alias('sit-thoracic-ext', 'thoracic-ext-chair-end');
+}
+alias('front-sit-arms-crossed', 'seated-rotation-start');
+alias('front-sit-rotate', 'seated-rotation-end');
+// TKE
+alias('stand-tke-bent', 'tke-start');
+alias('stand-tke-straight', 'tke-end');
+// wall sit (back to the wall)
+{
+  const mk = (k) => {
+    const p = flat(side('standing', { trunk: 0, hipL: k, hipR: k, kneeL: k, kneeR: k, shoulderL: 8, shoulderR: 8, elbowL: 10, elbowR: 10 }));
+    ground(p, FLOOR);
+    return p;
+  };
+  const up = mk(10);
+  const wallX = r1(pts(up).hip.x - 7.5 - 3);
+  // feet stay; the back slides down the wall
+  const down = mk(40);
+  down.root.x = r1(up.root.x);
+  // keep the back on the wall: shift the hip back to the wall, then re-solve shin so feet stay put
+  for (const p of [up, down]) p.props = [{ type: 'wall', x: wallX }];
+  {
+    const footX = pts(up).footR.x;
+    // solve hip angle (with knee = hip + shin) so feet stay at footX while the hip stays at the wall
+    let best = null;
+    for (let h = 30; h <= 70; h += 0.25) for (let k = 30; k <= 90; k += 0.25) {
+      const q = clone(down); q.hipL = q.hipR = h; q.kneeL = q.kneeR = k; flat(q); ground(q, FLOOR);
+      const P = pts(q); const err = Math.abs(P.footR.x - footX) + Math.abs(P.hip.x - pts(up).hip.x) * 0 + Math.abs(k - 40) * 0.02 + Math.abs(P.hip.x - up.root.x);
+      if (!best || err < best.err) best = { err, q };
+    }
+    best.q.root.x = up.root.x;
+    add('stand-wall-upright', up);
+    add('stand-wall-sit', best.q);
+  }
+}
+// sit to stand from a raised chair: feet are where the standing pose has them
+{
+  const fin = poses.stand;
+  const p = flat(side('sitting', { trunk: 30, hipL: 75, hipR: 75, kneeL: 65, kneeR: 65, shoulderL: 80, shoulderR: 80, elbowL: 0, elbowR: 0 }));
+  ground(p, FLOOR, ['legL', 'legR']);
+  atFoot(p, fin);
+  const cy = r1(pts(p).hip.y + 5.25);
+  const chair = { type: 'chair', x: r1(p.root.x - 2), y: cy, facing: 1 };
+  p.props = [chair, { type: 'cushion', x: chair.x, y: cy - 3, w: 30, h: 6 }];
+  add('sit-chair-high', p);
+  const m = flat(side('standing', { trunk: 35, hipL: 45, hipR: 45, kneeL: 40, kneeR: 40, shoulderL: 80, shoulderR: 80, elbowL: 0, elbowR: 0 }));
+  // anatomical consistency: knee flexion = hip flexion + shin forward tilt; keep given values, ground by the feet
+  ground(m, FLOOR); atFoot(m, fin);
+  m.props = p.props;
+  add('stand-from-chair-mid', m);
+}
+add('stand-mini-squat', (() => { const p = flat(side('standing', { trunk: 25, hipL: 45, hipR: 45, kneeL: 50, kneeR: 50, shoulderL: 90, shoulderR: 90, elbowL: 0, elbowR: 0 })); ground(p, FLOOR); atFoot(p, poses.stand); return p; })());
+// step-up with the left leg
+{
+  const stepX = 128;
+  const start = side('standing', { trunk: 10, hipL: 40, kneeL: 50, hipR: -10, kneeR: 3, shoulderL: -10, shoulderR: 18, elbowL: 20, elbowR: 20 });
+  flat(start); ground(start, FLOOR, ['legR']);
+  start.root.x = r1(start.root.x + stepX - pts(start).footL.x - 2);
+  solve(start, 'hipL', 20, 90, (q) => pts(q).footL.y + 4.25 - STEP);
+  start.kneeL = r1(start.kneeL); flat(start);
+  start.props = [{ type: 'step', x: stepX, w: 52 }];
+  add('stand-step-left-up', start);
+  const top = side('standing', { trunk: 2, hipL: 0, kneeL: 0, hipR: 5, kneeR: 30, shoulderL: 12, shoulderR: 12, elbowL: 15, elbowR: 15 });
+  flat(top, 'L'); ground(top, STEP, ['legL']);
+  top.root.x = r1(top.root.x + stepX - pts(top).footL.x - 2);
+  top.props = start.props;
+  add('stand-step-top', top);
+}
+// lateral step-down, front view (stance left on the step)
+{
+  const mk = (drop) => {
+    const p = front('standing', { hipL: 3, hipR: 5, kneeL: 0, kneeR: 10 - drop * 0.25, thighLenL: 1 - drop * 0.006, shinLenL: 1 - drop * 0.0015, shoulderL: 28, shoulderR: 28, elbowL: 0, elbowR: 0 });
+    ground(p, STEP, ['legL']);
+    p.props = [{ type: 'step', x: r1(pts(p).footL.x + 8), w: 40 }];
+    return p;
+  };
+  const a = mk(0); add('front-step-single', a);
+  const b = mk(40); b.props = a.props; b.root.x = r1(b.root.x + pts(a).footL.x - pts(b).footL.x); add('front-step-down', b);
+}
+// glute bridge
+{
+  const d = hook({}, ['L', 'R'], 80);
+  add('lying-bridge-down', d);
+  const u = bridgeUp(d); u.hipL = u.hipR; u.kneeL = u.kneeR; flat(u);
+  add('lying-bridge-up', u);
+}
+// side-lying (right side down, left on top) — front view
+alias('sidelying-clam-closed', 'clamshell-closed');
+alias('sidelying-clam-open', 'clamshell-open');
+{
+  // bottom leg slightly bent
+  const mk = (lift) => {
+    const p = clone(poses['side-lying-abd-down']);
+    p.hipL = r1(poses['side-lying-abd-down'].hipL + lift);
+    p.thighLenR = 0.86; p.shinLenR = 0.95; // bottom knee slightly bent toward the viewer (foreshortened)
+    return p;
+  };
+  add('sidelying-abd-down', mk(0));
+  add('sidelying-abd-up', mk(30));
+}
+// side-lying ER on the LEFT side (right arm on top) = mirrored image
+add('sidelying-er-down', mirrorFront(poses['side-lying-er-start']));
+add('sidelying-er-up', (() => { const q = mirrorFront(poses['side-lying-er-end']); q.elbowR = -q.elbowR + 2 * q.elbowR - 20; return q; })());
+// soft standing, lateral band walk, standing hip abduction with chair
+{
+  const soft = (o) => ground(front('standing', { hipL: 6, hipR: 6, thighLenL: 0.96, thighLenR: 0.96, shinLenL: 0.99, shinLenR: 0.99, shoulderL: 14, shoulderR: 14, elbowL: 0, elbowR: 0, ...o }), FLOOR);
+  add('front-stand-soft', soft());
+  const w = soft({ hipR: 20 });
+  w.root.x = r1(w.root.x + pts(poses['front-stand-soft']).footL.x - pts(w).footL.x);
+  add('front-band-walk-wide', w);
+  const ab = ground(front('standing', { hipL: 3, hipR: 25, thighLenL: 0.99, shoulderL: 30, elbowL: 0, shoulderR: 14, elbowR: 0 }), FLOOR, ['legL']);
+  const P = pts(ab);
+  const chair = { type: 'chair', x: r1(P.hipJL.x + 46), y: SEAT };
+  aim(ab, 'armL', { x: chair.x - 10, y: SEAT - 48 }, (e) => e <= 0);
+  ab.props = [chair, { type: 'door', x: r1(P.footL.x + 24), y: FLOOR - 10 }];
+  ab.root.x = r1(ab.root.x + pts(poses['front-stand-soft']).footL.x - P.footL.x);
+  // props are relative to the figure; shift with it
+  const dx = pts(ab).footL.x - P.footL.x;
+  ab.props = ab.props.map((x) => ({ ...x, x: r1(x.x + dx) }));
+  add('front-hip-abd-right', ab);
+}
+// holding a chair (side), hip extension, calf raise
+{
+  const hold = side('standing', { trunk: 3, shoulderL: 40, shoulderR: 40, elbowL: 30, elbowR: 30 });
+  ground(hold, FLOOR);
+  const P = pts(hold);
+  const chair = { type: 'chair', x: r1(P.handR.x + 16), y: r1(Math.max(SEAT, P.handR.y + 3.25 + 48)), facing: 1 };
+  // put the hands on the backrest top
+  chair.y = SEAT; chair.x = r1(P.handR.x + 12);
+  aim(hold, 'armR', { x: chair.x - 16, y: SEAT - 48 - 4 }, (e) => e >= 0);
+  hold.shoulderL = hold.shoulderR; hold.elbowL = hold.elbowR;
+  hold.props = [chair];
+  add('stand-hold-chair', hold);
+  const ext = side('standing', { trunk: 5, hipL: 0, kneeL: 5, hipR: -20, kneeR: 0, shoulderL: hold.shoulderR, shoulderR: hold.shoulderR, elbowL: hold.elbowR, elbowR: hold.elbowR });
+  flat(ext, 'L'); ground(ext, FLOOR, ['legL']);
+  ext.root.x = r1(ext.root.x + pts(hold).footL.x - pts(ext).footL.x);
+  ext.props = [chair];
+  add('stand-hip-ext-right', ext);
+  const cr = clone(hold); cr.ankleL = cr.ankleR = 40; ground(cr, FLOOR);
+  add('stand-calf-raise', cr);
+}
+// single leg stance (left)
+add('stand-single-left', (() => { const p = flat(side('standing', { hipL: 3, kneeL: 5, hipR: 30, kneeR: 60, shoulderL: 25, shoulderR: 25, elbowL: 10, elbowR: 10 }), 'L'); return ground(p, FLOOR, ['legL']); })());
+{
+  const p = flat(side('standing', { trunk: 10, hipL: 14, kneeL: 28, hipR: 30, kneeR: 0, shoulderL: 30, shoulderR: 30, elbowL: 10, elbowR: 10 }), 'L');
+  ground(p, FLOOR, ['legL']);
+  p.ankleR = 20;
+  solve(p, 'hipR', 2, 60, (q) => pts(q).toeR.y + 3 - (FLOOR - 0.5));
+  add('stand-single-tap', p);
+}
+// prone Y/T/W: shown from above (reads far better than a side view)
+alias('prone-arms-y', 'prone-y');
+alias('prone-arms-t', 'prone-t');
+alias('prone-arms-w', 'prone-w');
+// wall slides facing the wall
+{
+  const lo = ground(side('standing', { trunk: 0, shoulderL: 90, shoulderR: 90, elbowL: 90, elbowR: 90 }), FLOOR);
+  const wx = r1(pts(lo).elbowR.x + 4.5);
+  lo.props = [{ type: 'wall', x: wx, facing: -1 }];
+  add('stand-wall-slide-low', lo);
+  const hi = ground(side('standing', { trunk: 0, shoulderL: 160, shoulderR: 160, elbowL: 20, elbowR: 20 }), FLOOR);
+  // keep the hands on the wall plane: shift so the hand touches the wall
+  hi.root.x = lo.root.x;
+  hi.props = lo.props;
+  add('stand-wall-slide-high', hi);
+}
+// serratus punch standing, band to an anchor behind
+{
+  const mk = (sh, el, tr) => { const p = flat(side('standing', { trunk: tr, hipL: 10, hipR: -10, kneeL: 8, kneeR: 8, shoulderR: sh, elbowR: el, shoulderL: 5, elbowL: 15 })); return ground(p, FLOOR); };
+  const a = mk(85, 45, 0); const b = mk(90, 0, 5); b.reachR = 5;
+  for (const p of [a, b]) p.props = [{ type: 'door', x: 12, y: 62 }];
+  add('stand-arm-forward-bent', a);
+  add('stand-arm-forward-reach', b);
+}
+// ER with towel (front)
+{
+  const a = clone(poses['er0-start']); const b = clone(poses['er0-end']);
+  const P = pts(a);
+  const towel = { type: 'towel', x: r1(P.elbowR.x + 5.5), y: r1(P.elbowR.y - 2), r: 3.6 };
+  a.props = [towel]; b.props = [towel];
+  add('front-er-neutral', a); add('front-er-out', b);
+}
+// ER 90/90 front view: forearm grows from pointing at the viewer to vertical
+add('front-er9090-start', ground(front('standing', { shoulderR: 90, elbowR: 90, forearmLenR: 0.22, shoulderL: 8, elbowL: 0 }), FLOOR));
+add('front-er9090-end', ground(front('standing', { shoulderR: 90, elbowR: 90, forearmLenR: 1, shoulderL: 8, elbowL: 0 }), FLOOR));
+// face pull (start forward-up)
+add('stand-facepull-start', ground(side('standing', { trunk: -2, shoulderL: 115, shoulderR: 115, elbowL: 0, elbowR: 0, upperArmLenL: 1, upperArmLenR: 1, hipL: -8, hipR: 8 }), FLOOR));
+add('stand-facepull-end', ground(side('standing', { trunk: -2, shoulderL: -100, shoulderR: -100, elbowL: -80, elbowR: -80, upperArmLenL: 0.38, upperArmLenR: 0.38, hipL: -8, hipR: 8 }), FLOOR));
+// straight-arm pulldown (upright, soft knees)
+{
+  const mk = (sh) => { const p = flat(side('standing', { trunk: 4, hipL: 4, hipR: 4, kneeL: 10, kneeR: 10, shoulderL: sh, shoulderR: sh, elbowL: 5, elbowR: 5 })); return ground(p, FLOOR); };
+  add('stand-arms-forward-high', mk(120));
+  add('stand-arms-down', mk(-5));
+}
+// archery draw (front view, bow arm left)
+add('front-draw-start', ground(front('standing', { ...stance, shoulderL: 90, elbowL: 0, shoulderR: -90, elbowR: 4, upperArmLenR: 0.92, forearmLenR: 1 }), FLOOR));
+add('front-draw-anchor', ground(front('standing', { ...stance, shoulderL: 90, elbowL: 0, shoulderR: 94, elbowR: 158, upperArmLenR: 1, forearmLenR: 1 }), FLOOR));
+add('front-draw-expand', ground(front('standing', { ...stance, shoulderL: 90, elbowL: 0, shoulderR: 98, elbowR: 163, upperArmLenR: 1, forearmLenR: 1, twist: -6 }), FLOOR));
+// right arm push against the wall
+{
+  const p = ground(side('standing', { trunk: -2, shoulderR: 90, elbowR: 0, shoulderL: 5, elbowL: 15 }), FLOOR);
+  p.props = [{ type: 'wall', x: r1(pts(p).handR.x + 4.5), facing: -1 }];
+  add('stand-arm-push-wall', p);
+}
+// pallof press (side view per request: hands at sternum → pressed forward)
+{
+  const mk = (sh, el) => { const p = flat(side('standing', { hipL: 4, hipR: -4, kneeL: 10, kneeR: 10, shoulderL: sh, shoulderR: sh, elbowL: el, elbowR: el })); return ground(p, FLOOR); };
+  add('stand-pallof-in', mk(20, 110));
+  add('stand-pallof-out', mk(90, 0));
+}
+// dead bug (feet flat), band from hands to a low anchor behind the head
+{
+  const s = hook({ shoulderL: 180, shoulderR: 180, elbowL: 0, elbowR: 0 }, ['L', 'R'], 90);
+  const P = pts(s);
+  s.props = ['mat', { type: 'door', x: r1(P.head.x - 38), y: r1(MAT - 22) }];
+  add('lying-deadbug-start', s);
+  const r = clone(s); r.hipL = 90; r.kneeL = 0; delete r.ankleL;
+  add('lying-deadbug-reach', r);
+}
+// side plank against a wall (front view), right forearm on the wall, left hand on the hip
+{
+  const p = front('standing', { trunk: -20, hipL: 20, hipR: -20, kneeL: 0, kneeR: 0, shoulderR: 92, elbowR: 88 });
+  ground(p, FLOOR, ['legL', 'legR']);
+  const P = pts(p);
+  aim(p, 'armL', { x: P.hipJL.x + 2, y: P.hipJL.y - 4 }, (e) => e < 0);
+  p.props = [{ type: 'wall', x: r1(Math.min(P.elbowR.x, P.handR.x) - 4.5), facing: 1 }];
+  add('front-side-plank-wall', p);
+}
+// doorway stretch, calf stretch
+alias('stand-doorway-stretch', 'doorway-stretch');
+{
+  const p = side('standing', { trunk: 15, hipR: 25, kneeR: 20, hipL: -20, kneeL: 0, shoulderL: 56, shoulderR: 56, elbowL: 15, elbowR: 15 });
+  flat(p); ground(p, FLOOR);
+  p.props = [{ type: 'wall', x: r1(Math.max(pts(p).handR.x, pts(p).toeR.x + 2) + 4.5), facing: -1 }];
+  add('stand-calf-stretch', p);
+}
+
+alias('er9090-start', 'front-er9090-start');
+alias('er9090-end', 'front-er9090-end');
+// flagged by WP-Content: serratus punch is standing, lat pulldown is seated
+alias('serratus-punch-start', 'stand-arm-forward-bent');
+alias('serratus-punch-end', 'stand-arm-forward-reach');
+alias('lat-pulldown-start', 'sit-arms-overhead');
+alias('lat-pulldown-end', 'sit-pulldown-end');
+
+// ================================================================ v2 content: rowing, crutch prep, post-op
+/** IK both legs (same angles L = R) / both arms */
+const sameLegs = (p) => { p.hipL = p.hipR; p.kneeL = p.kneeR; if (p.ankleR !== undefined) p.ankleL = p.ankleR; return p; };
+const sameArms = (p) => { p.shoulderL = p.shoulderR; p.elbowL = p.elbowR; return p; };
+/** straight-arm length for a given elbow flexion */
+const armLen = (e) => Math.hypot(SEG.upperArm + SEG.forearm * Math.cos(e * RAD), SEG.forearm * Math.sin(e * RAD));
+
+// ---------------------------------------------------------------- rowing machine (side view, flywheel in front = right)
+{
+  const SEAT_TOP = 148; // seat top of the rowing machine (seat carriage runs on the rail below)
+  const RAIL = SEAT_TOP + 14;
+  const F = { x: 132, y: SEAT_TOP + 5 }; // ankle point on the foot stretcher (heel cup a bit below the seat)
+  const SOLE = 130; // foot stretcher: sole direction from straight down (40° toes up)
+  const hipY = SEAT_TOP - BODY_LEG_HALF - 1;
+  const legsTo = (p) => {
+    aim(p, 'legR', F, (k) => k > 0);
+    p.ankleR = r1(p.hipR - p.kneeR - (SOLE - 90));
+    return sameLegs(p);
+  };
+  const base = (hipX, trunk) => legsTo(side('sitting', { root: { x: r1(hipX), y: hipY }, trunk, shoulderL: 0, shoulderR: 0, elbowL: 0, elbowR: 0 }));
+  // catch: shins ~vertical (hip placed so the knee is right above the ankle), body ~1 o'clock, arms long
+  const catchHipX = F.x - Math.sqrt(SEG.thigh ** 2 - (F.y - SEG.shin - hipY) ** 2);
+  const cat = base(catchHipX, 22);
+  cat.shoulderR = 68; cat.elbowR = 4; sameArms(cat);
+  const Pc = pts(cat);
+  const exit = { x: r1(Pc.handR.x + 7), y: r1(Pc.handR.y - 1) };
+  // finish: legs long (knee ~5°), lean back ~15° (11 o'clock), handle at the lower ribs, elbows behind the body
+  const finHipX = F.x - Math.sqrt((SEG.thigh + SEG.shin - 0.08) ** 2 - (F.y - hipY) ** 2);
+  const fin = base(finHipX, -15);
+  {
+    const P = pts(fin);
+    const up = { x: Math.sin(fin.trunk * RAD), y: -Math.cos(fin.trunk * RAD) };
+    const chest = { x: Math.cos(fin.trunk * RAD), y: Math.sin(fin.trunk * RAD) };
+    const ribs = { x: P.hip.x + up.x * 26 + chest.x * 9, y: P.hip.y + up.y * 26 + chest.y * 9 };
+    aim(fin, 'armR', ribs, (j2, e) => e.x < P.neck.x);
+    sameArms(fin);
+  }
+  const finHand = pts(fin).handR;
+  /** arms long (elbow e), hands on the handle path exit → finish hand */
+  const onPath = (p, e = 4) => {
+    const P = pts(p);
+    const L = armLen(e);
+    // bisection along the strap line for |hand - shoulder| = L (start near the exit)
+    let lo = 0, hi = 1;
+    const at = (u) => ({ x: exit.x + (finHand.x - exit.x) * u, y: exit.y + (finHand.y - exit.y) * u });
+    for (let i = 0; i < 50; i++) { const m = (lo + hi) / 2; const q = at(m); if (Math.hypot(q.x - P.neck.x, q.y - P.neck.y) > L) lo = m; else hi = m; }
+    aim(p, 'armR', at(lo), (j2) => j2 >= 0);
+    return sameArms(p);
+  };
+  const drive = onPath(base(F.x - 70, 18));
+  const rec = onPath(base(F.x - 74, 18));
+  const rower = { type: 'rower', x0: r1(finHipX - 26), x1: r1(exit.x + 10), rail: RAIL, seat: SEAT_TOP, r: 16, foot: { x: F.x, y: F.y, a: SOLE }, exit };
+  for (const [id, p] of [['row-catch', cat], ['row-drive', drive], ['row-finish', fin], ['row-recovery', rec]]) {
+    p.props = [rower];
+    add(id, p);
+  }
+}
+
+// ---------------------------------------------------------------- chair dips (hands on the front edge behind, left leg resting long)
+{
+  const chair = { type: 'chair', x: 62, y: SEAT, facing: 1 };
+  const hand = { x: chair.x + 13, y: SEAT - 3.25 };
+  const mk = (hip, elbowBehind) => {
+    const p = side('sitting', { root: { x: r1(hip.x), y: r1(hip.y) }, trunk: 2, hipR: 85, kneeR: 85, hipL: 70, kneeL: 8 });
+    const P = pts(p);
+    aim(p, 'armR', hand, elbowBehind ? (j2, e) => e.x < P.neck.x : (j2) => j2 >= 0);
+    sameArms(p);
+    return p;
+  };
+  const upHip = { x: chair.x + 24, y: 0 };
+  // arms nearly straight (elbow 5°) with the hands a little behind the shoulders
+  const L = armLen(5);
+  const dx = upHip.x - hand.x;
+  upHip.y = hand.y - Math.sqrt(L * L - dx * dx) + SEG.trunk * Math.cos(2 * RAD);
+  const up = mk(upHip, false);
+  const footR = { x: r1(up.root.x + 44), y: FLOOR - 4.25 };
+  const legs = (p) => {
+    aim(p, 'legR', footR, (k) => k > 0); flat(p, 'R');
+    // left leg resting long, heel on the floor (slides with the body), toes up
+    p.kneeL = 8;
+    solve(p, 'hipL', 20, 89, (q) => pts(q).footL.y + 4.25 - FLOOR);
+    p.ankleL = r1(p.hipL - p.kneeL - 12);
+    return p;
+  };
+  legs(up);
+  const down = mk({ x: upHip.x + 4, y: upHip.y + 12 }, true);
+  legs(down);
+  for (const p of [up, down]) p.props = [chair];
+  add('chair-dip-up', up);
+  add('chair-dip-down', down);
+}
+
+// ---------------------------------------------------------------- seated press-up on the armrests (crutch support)
+{
+  const ARMS = 16;
+  const chair = { type: 'chair', x: chairX, y: SEAT, facing: 1, arms: ARMS };
+  const hand = { x: chairX - 2, y: SEAT - ARMS - 3.25 };
+  const mk = (lift) => {
+    const p = flat(side('sitting', { root: { x: 92, y: r1(seatY - lift) }, trunk: lift ? 1 : -2, hipL: 90, hipR: 90, kneeL: 90, kneeR: 90 }));
+    const P = pts(p);
+    aim(p, 'armR', hand, (j2, e) => e.x < P.neck.x);
+    return sameArms(p);
+  };
+  const a = mk(0);
+  const feet = pts(a).footR;
+  const b = mk(12);
+  // feet stay planted while the buttocks lift
+  for (const s of ['L', 'R']) { aim(b, 'leg' + s, { x: feet.x, y: feet.y }, (k) => k > 0); flat(b, s); }
+  for (const p of [a, b]) p.props = [chair];
+  add('seated-press-up-down', a);
+  add('seated-press-up-up', b);
+}
+
+// ---------------------------------------------------------------- band triceps extension (facing the door, anchor high)
+{
+  const mk = (sh, el) => { const p = flat(side('standing', { trunk: 6, hipL: 3, hipR: 3, kneeL: 6, kneeR: 6, shoulderR: sh, elbowR: el })); ground(p, FLOOR); return sameArms(p); };
+  const a = mk(8, 92);
+  const b = mk(2, 4);
+  const door = { type: 'door', x: r1(pts(a).handR.x + 40), y: r1(pts(a).head.y - 6) };
+  a.props = [door]; b.props = [door];
+  add('stand-triceps-ext-start', a);
+  add('stand-triceps-ext-end', b);
+}
+
+// ---------------------------------------------------------------- sit to stand over the right leg (left foot forward, unloaded)
+{
+  const chair = { type: 'chair', x: chairX, y: SEAT, facing: 1 };
+  const s0 = flat(side('sitting', { root: { x: 92, y: seatY }, trunk: -3, hipL: 80, hipR: 90, kneeL: 50, kneeR: 90, shoulderL: 22, shoulderR: 22, elbowL: 55, elbowR: 55 }));
+  const footR = pts(s0).footR;
+  const footL = { x: r1(footR.x + 17), y: footR.y };
+  const left = (p, toeUp = 0) => { aim(p, 'legL', footL, (k) => k > 0); p.ankleL = r1(p.hipL - p.kneeL - toeUp); return p; };
+  left(s0);
+  const m = flat(side('sitting', { trunk: 40, hipR: 72, kneeR: 84, shoulderL: 28, shoulderR: 28, elbowL: 25, elbowR: 25 }), 'R');
+  ground(m, FLOOR, ['legR']); atFoot(m, s0, 'R');
+  left(m, 8);
+  // standing on a soft right knee; the left foot stays where it was and only touches lightly (toes up)
+  const e = flat(side('standing', { trunk: 6, hipR: 12, kneeR: 25, shoulderL: 8, shoulderR: 8, elbowL: 10, elbowR: 10 }), 'R');
+  ground(e, FLOOR, ['legR']); atFoot(e, s0, 'R');
+  left(e, 12);
+  for (const p of [s0, m, e]) p.props = [chair];
+  add('sit-right-load', s0);
+  add('stand-from-chair-right-mid', m);
+  add('stand-right-load', e);
+}
+
+// ---------------------------------------------------------------- single leg stance left with arm reaches
+{
+  const mk = (o) => { const p = flat(side('standing', { hipL: 3, kneeL: 8, hipR: 4, kneeR: 85, shoulderL: 18, shoulderR: 18, elbowL: 12, elbowR: 12, ...o }), 'L'); return ground(p, FLOOR, ['legL']); };
+  const a = mk({});
+  const b = mk({ trunk: 12, hipL: 10, shoulderR: 88, elbowR: 0 }); atFoot(b, a, 'L');
+  const c = mk({ trunk: 2, shoulderR: 165, elbowR: 0 }); atFoot(c, a, 'L');
+  add('stand-single-left-reach-start', a);
+  add('stand-single-left-reach-forward', b);
+  add('stand-single-left-reach-up', c);
+}
+
+// ---------------------------------------------------------------- long sitting, hands at the left knee (patella mobilisation)
+{
+  const mk = (dx) => {
+    // shown mirrored (figure faces left) so the left leg is the near one and the hands on the left knee are visible
+    const p = side('sitting', { trunk: 38, headTilt: 18, hipL: 90, kneeL: 0, hipR: 105, kneeR: 30, ankleL: -6 });
+    ground(p, MAT, ['trunk', 'legL']);
+    solve(p, 'hipR', 92, 150, (q) => pts(q).footR.y + 4.25 - MAT);
+    flat(p, 'R');
+    const P = pts(p);
+    aim(p, 'armR', { x: P.kneeL.x + dx, y: P.kneeL.y - 5 }, (j2) => j2 >= 0);
+    p.props = ['mat'];
+    return sameArms(p);
+  };
+  add('long-sit-patella-up', mk(-3));
+  add('long-sit-patella-down', mk(3));
+}
+
+// ---------------------------------------------------------------- supine: glute set, ankle pumps, right leg band press
+{
+  const relax = lie(supine({ shoulderL: 92, shoulderR: 92, elbowL: 0, elbowR: 0, ankleL: 25, ankleR: 25 }));
+  add('supine-glute-relax', relax);
+  const set = lie(supine({ hipL: 90, hipR: 90, kneeL: 0, kneeR: 0, shoulderL: 90, shoulderR: 90, elbowL: 0, elbowR: 0, ankleL: 5, ankleR: 5 }));
+  set.root.x = relax.root.x;
+  add('supine-glute-set', set);
+  const pump = (a) => { const p = lie(supine({ ankleL: a, ankleR: a })); p.root.x = relax.root.x; return ground(p, MAT); };
+  add('supine-ankle-up', pump(-15));
+  add('supine-ankle-down', pump(55));
+  // right leg band press: knee to chest → push up/forward against the band; left leg long and relaxed
+  const press = (hipR, kneeR, toeDir) => {
+    const p = lie(supine({ hipL: 90, kneeL: 0, hipR, kneeR, shoulderL: 150, shoulderR: 150, elbowL: 60, elbowR: 60 }));
+    ground(p, MAT, ['trunk', 'head', 'legL']);
+    const P = pts(p);
+    // hands hold the band ends above the chest
+    aim(p, 'armR', { x: P.neck.x + 16, y: P.neck.y - 24 }, (j2) => j2 >= 0);
+    sameArms(p);
+    p.ankleR = r1(hipR - kneeR + 90 - toeDir); // toes up, sole toward the band
+    return p;
+  };
+  add('supine-right-leg-tuck', press(198, 102, 185));
+  add('supine-right-leg-press', press(135, 4, 200));
+}
+
+// ================================================================ v4: dynamic warm-up & static stretching (SPEC §15)
+// ---------------------------------------------------------------- leg swing front/back, hands on a wall in front
+{
+  const mk = (hipR, kneeR) => {
+    const p = flat(side('standing', { trunk: 0, hipL: 0, kneeL: 5, hipR, kneeR, shoulderL: 84, shoulderR: 84, elbowL: 0, elbowR: 0 }), 'L');
+    ground(p, FLOOR, ['legL']);
+    p.ankleR = r1(hipR - kneeR + 15); // swinging foot relaxed
+    return p;
+  };
+  const a = mk(22, 6);
+  const b = mk(-18, 10); atFoot(b, a, 'L');
+  const wall = { type: 'wall', x: r1(pts(a).handR.x + 4.5), facing: -1 };
+  a.props = [wall]; b.props = [wall];
+  add('leg-swing-front-a', a);
+  add('leg-swing-front-b', b);
+}
+// ---------------------------------------------------------------- leg swing sideways (front view, left hand on a chair)
+alias('leg-swing-side-out', 'front-hip-abd-right', (p) => { p.props = p.props.filter((x) => x.type === 'chair'); });
+alias('leg-swing-side-in', 'front-hip-abd-right', (p) => { p.hipR = -10; p.props = p.props.filter((x) => x.type === 'chair'); });
+// ---------------------------------------------------------------- pelvis circles (front view, hands on the hips, feet stay)
+{
+  const base = ground(front('standing', { hipL: 6, hipR: 6, kneeL: 0, kneeR: 0 }), FLOOR);
+  const P0 = pts(base);
+  const mk = (dx) => {
+    const p = clone(base);
+    p.root.x = r1(p.root.x + dx);
+    p.trunk = r1(-dx * 0.6);
+    for (const s of ['L', 'R']) aim(p, 'leg' + s, P0['foot' + s], (k) => k >= 0);
+    return handsOnHips(p);
+  };
+  add('hip-circle-left', mk(7));
+  add('hip-circle-right', mk(-7));
+}
+// ---------------------------------------------------------------- seated ankle circles (right leg long, heel on the floor)
+{
+  const mk = (toe) => {
+    const p = flat(side('sitting', { root: { x: 92, y: seatY }, trunk: -3, hipL: 90, hipR: 90, kneeL: 90, kneeR: 15, shoulderL: 15, shoulderR: 15, elbowL: 25, elbowR: 25 }));
+    // lowest of heel/toes touches the floor (sole angle follows the hip angle)
+    solve(p, 'hipR', 40, 90, (q) => { q.ankleR = q.hipR - q.kneeR + toe; const P = pts(q); return Math.max(P.footR.y + 4.25, P.toeR.y + 3) - FLOOR; });
+    p.ankleR = r1(p.hipR - p.kneeR + toe);
+    p.props = [{ type: 'chair', x: chairX, y: SEAT, facing: 1 }];
+    return p;
+  };
+  add('sit-ankle-up', mk(-22));
+  add('sit-ankle-down', mk(32));
+}
+// ---------------------------------------------------------------- band dislocates (front view, wide grip low → overhead)
+add('band-dislocate-low', ground(front('standing', { shoulderL: 28, shoulderR: 28, elbowL: 0, elbowR: 0 }), FLOOR));
+add('band-dislocate-high', ground(front('standing', { shoulderL: 158, shoulderR: 158, elbowL: 0, elbowR: 0 }), FLOOR));
+// ---------------------------------------------------------------- hip flexor stretch standing (short split stance, back = left leg)
+{
+  const a = flat(side('standing', { trunk: 2, hipR: 20, kneeR: 22, hipL: -20, kneeL: 3, shoulderL: 12, shoulderR: 12, elbowL: 25, elbowR: 25 }));
+  ground(a, FLOOR);
+  a.ankleL = r1(a.hipL - a.kneeL + 12); // back heel lifts slightly
+  const P0 = pts(a);
+  const b = clone(a);
+  b.trunk = -4; b.root.x = r1(b.root.x + 3); b.root.y = r1(b.root.y + 1.5);
+  aim(b, 'legR', P0.footR, (k) => k >= 0); flat(b, 'R');
+  aim(b, 'legL', P0.footL, (k) => k >= 0); b.ankleL = r1(b.hipL - b.kneeL + 12);
+  add('stand-hip-flexor-stagger', a);
+  add('stand-hip-flexor-stretch', b);
+}
+// ---------------------------------------------------------------- supine: knee hug right (left hip flexor), hamstring band, figure 4
+{
+  const hug = lie(supine({ hipR: 212, kneeR: 122, hipL: 90, kneeL: 0, ankleL: 20 }));
+  ground(hug, MAT, ['trunk', 'head', 'legL']);
+  // v5.3: hands hold the back of the thigh (arms lower than at the knee – shoulder friendly)
+  { const P = pts(hug); aim(hug, 'armR', { x: P.hipJR.x + (P.kneeR.x - P.hipJR.x) * 0.55, y: P.hipJR.y + (P.kneeR.y - P.hipJR.y) * 0.55 + 4 }, (j2) => j2 >= 0); sameArms(hug); }
+  hug.props = ['mat'];
+  add('supine-knee-hug-right', hug);
+  const ham = (hipR) => {
+    const p = lie(supine({ hipR, kneeR: 0, hipL: 90, kneeL: 0, ankleL: 20, ankleR: -8 }));
+    ground(p, MAT, ['trunk', 'head', 'legL']);
+    // hands hold the band ends above the chest, arms toward the raised foot
+    p.shoulderL = p.shoulderR = 148; p.elbowL = p.elbowR = 12;
+    p.props = ['mat'];
+    return p;
+  };
+  add('supine-hamstring-band-low', ham(132));
+  add('supine-hamstring-band', ham(158));
+  const f4 = hook({}, ['L'], 85);
+  { const P = pts(f4); aim(f4, 'legR', { x: P.kneeL.x - 5, y: P.kneeL.y - 6 }, (k) => k > 0); f4.ankleR = 10; }
+  f4.props = ['mat'];
+  add('supine-figure-4', f4);
+}
+// ---------------------------------------------------------------- seated front view: tall, side bend, cross-body, neck
+{
+  const mk = (o = {}) => {
+    const p = front('sitting', { hipL: 80, hipR: 80, thighLenL: 0.25, thighLenR: 0.25, kneeL: 80, kneeR: 80, shoulderL: 14, shoulderR: 14, elbowL: -25, elbowR: -25, props: [{ type: 'chair' }], ...o });
+    return ground(p, FLOOR, ['legL', 'legR']);
+  };
+  add('front-sit-tall', mk());
+  add('front-sit-side-bend', mk({ trunk: 16, shoulderR: 168, elbowR: -20, shoulderL: 18, elbowL: 0, headTilt: 6 }));
+  {
+    const p = mk();
+    const P = pts(p);
+    aim(p, 'armR', { x: P.shoulderL.x + 14, y: P.shoulderL.y + 4 }, (e, el) => el.y >= P.shoulderR.y - 2);
+    const Q = pts(p);
+    aim(p, 'armL', { x: Q.elbowR.x, y: Q.elbowR.y + 1 }, (e, el) => el.y > Q.elbowR.y);
+    add('front-sit-cross-body', p);
+  }
+  {
+    const p = mk({ headTilt: -40, shoulderL: 10, elbowL: 0 });
+    const P = pts(p);
+    aim(p, 'armR', { x: P.head.x - 6, y: P.head.y - 8 }, (e, el) => el.y < P.shoulderR.y + 6);
+    add('front-sit-neck-stretch', p);
+  }
+}
+// ---------------------------------------------------------------- seated forearm flexor stretch (side view)
+{
+  const mk = (pull) => {
+    const p = flat(side('sitting', { root: { x: 92, y: seatY }, trunk: -2, hipL: 90, hipR: 90, kneeL: 90, kneeR: 90, shoulderR: 60, elbowR: 0, shoulderL: 15, elbowL: 40 }));
+    if (pull) { const P = pts(p); aim(p, 'armL', { x: P.handR.x - 2, y: P.handR.y - 3 }, (e) => e >= 0); }
+    p.props = [{ type: 'chair', x: chairX, y: SEAT, facing: 1 }];
+    return p;
+  };
+  add('sit-forearm-stretch-start', mk(false));
+  add('sit-forearm-stretch', mk(true));
+}
+
+// ---------------------------------------------------------------- v5 sling trainer (straps fixed at the top of the door)
+// Body angle progressions lean the straight body around the feet (feet stay on the floor, knees straight or soft).
+{
+  const sling = (A, extra = {}) => ({ type: 'sling', x: r1(A.x), y: r1(A.y), ...extra });
+  /** straight body leaning by T° (− = back, + = forward) around the feet at footX */
+  const lean = (T, footX, o = {}) => {
+    const p = flat(side('standing', { trunk: T, hipL: -T, hipR: -T, kneeL: 0, kneeR: 0, shoulderL: 0, shoulderR: 0, elbowL: 0, elbowR: 0, ...o }));
+    ground(p, FLOOR);
+    p.root.x = r1(p.root.x + footX - pts(p).footR.x);
+    return p;
+  };
+  /** both (or given) arms straight toward point A */
+  const toward = (p, A, sides = ['L', 'R']) => {
+    const P = pts(p);
+    const a = Math.round(dirAng({ x: A.x - P.neck.x, y: A.y - P.neck.y }));
+    for (const s of sides) { p['shoulder' + s] = a; p['elbow' + s] = 0; }
+    return p;
+  };
+  const withProps = (p, props) => { p.props = props; return p; };
+
+  // inverted row: body leans back, pulls the chest to the handles
+  {
+    const FX = 120; const A = { x: FX + 24, y: 12 };
+    const s = toward(lean(-38, FX), A);
+    const e = lean(-24, FX);
+    const P = pts(e);
+    aim(e, 'armR', { x: P.neck.x + 13, y: P.neck.y + 13 }, (j2, el) => el.x < P.neck.x + 4);
+    sameArms(e);
+    add('sling-row-start', withProps(s, [sling(A)]));
+    add('sling-row-end', withProps(e, [sling(A)]));
+  }
+  // face pull: hands to the forehead, elbows high and wide (upper arms foreshortened)
+  {
+    const FX = 118; const A = { x: FX + 20, y: 0 };
+    const s = toward(lean(-30, FX), A);
+    const e = lean(-18, FX, { upperArmLenL: 0.55, upperArmLenR: 0.55 });
+    const P = pts(e);
+    aim(e, 'armR', { x: P.head.x + 7, y: P.head.y - 1 }, (j2, el) => el.y <= P.neck.y + 3);
+    sameArms(e);
+    add('sling-face-pull-start', withProps(s, [sling(A)]));
+    add('sling-face-pull-end', withProps(e, [sling(A)]));
+  }
+  // Y raise: straight arms from forward to overhead (Y), body comes up
+  {
+    const FX = 118; const A = { x: FX + 22, y: 4 };
+    const s = toward(lean(-26, FX), A);
+    const e = lean(-12, FX, { shoulderL: 162, shoulderR: 162, elbowL: 0, elbowR: 0 });
+    add('sling-y-raise-start', withProps(s, [sling(A)]));
+    add('sling-y-raise-end', withProps(e, [sling(A)]));
+  }
+  // T raise / reverse fly: arms open to the sides (toward the viewer → foreshortened)
+  {
+    const FX = 118; const A = { x: FX + 22, y: 8 };
+    const s = toward(lean(-26, FX), A);
+    const e = lean(-12, FX, { shoulderL: 90, shoulderR: 90, elbowL: 0, elbowR: 0, upperArmLenL: 0.22, upperArmLenR: 0.22, forearmLenL: 0.22, forearmLenR: 0.22 });
+    add('sling-t-raise-start', withProps(s, [sling(A)]));
+    add('sling-t-raise-end', withProps(e, [sling(A)]));
+    const fs = toward(lean(-22, FX), A); fs.elbowL = fs.elbowR = 14;
+    const fe = lean(-10, FX, { shoulderL: 86, shoulderR: 86, elbowL: 18, elbowR: 18, upperArmLenL: 0.28, upperArmLenR: 0.28, forearmLenL: 0.3, forearmLenR: 0.3 });
+    add('sling-rear-delt-fly-start', withProps(fs, [sling(A)]));
+    add('sling-rear-delt-fly-end', withProps(fe, [sling(A)]));
+  }
+  // single-arm row in shooting stance: right (draw) hand on the strap, left (bow) arm stays long forward
+  {
+    const FX = 118; const A = { x: FX + 26, y: 14 };
+    const s = toward(lean(-22, FX, { hipL: 30, hipR: 14 }), A, ['R']);
+    s.shoulderL = 86; s.elbowL = 0; flat(s); ground(s, FLOOR);
+    const e = lean(-12, FX, { hipL: 20, hipR: 4 });
+    e.shoulderL = 88; e.elbowL = 0; flat(e); ground(e, FLOOR);
+    const P = pts(e);
+    aim(e, 'armR', { x: P.neck.x + 7, y: P.neck.y + 3 }, (j2, el) => el.x < P.neck.x);
+    add('sling-single-arm-row-start', withProps(s, [sling(A, { to: ['handR'] })]));
+    add('sling-single-arm-row-end', withProps(e, [sling(A, { to: ['handR'] })]));
+  }
+  // forearm plank (back to the door): feet on the floor, forearms rest in the cradles (no kneeling, no feet in the straps)
+  {
+    const FX = 70;
+    const mk = (T, sh) => { const p = lean(T, FX, { shoulderL: sh, shoulderR: sh, elbowL: 90 - sh + 6, elbowR: 90 - sh + 6 }); return p; };
+    const a = mk(58, 32);
+    const A = { x: FX - 26, y: 6 }; // back to the door: the straps run back over the shoulders
+    add('sling-plank-forearms', withProps(a, [sling(A, { behind: true })]));
+    add('sling-plank-forearms-reach', withProps(mk(62, 44), [sling(A, { behind: true })]));
+  }
+  // pallof press (front view): anchor at the viewer's right, body leans slightly away
+  {
+    const a = clone(poses['pallof-press-start']); a.trunk = -3;
+    const b = clone(poses['pallof-press-end']); b.trunk = -3;
+    const A = { x: r1(pts(a).hands.x + 62), y: 40 };
+    add('sling-pallof-in', withProps(a, [sling(A)]));
+    add('sling-pallof-out', withProps(b, [sling(A)]));
+  }
+  // standing rollout (fallout), anchor behind: small range, arms go forward-up as the body leans in
+  {
+    const FX = 108; const A = { x: FX - 52, y: -6 };
+    const s = lean(14, FX, { shoulderL: 92, shoulderR: 92, elbowL: 0, elbowR: 0 });
+    const e = lean(26, FX, { shoulderL: 128, shoulderR: 128, elbowL: 0, elbowR: 0 });
+    add('sling-rollout-start', withProps(s, [sling(A, { behind: true })]));
+    add('sling-rollout-end', withProps(e, [sling(A, { behind: true })]));
+  }
+  // assisted mini squat: hold the straps, sit back to max ~50°
+  {
+    const FX = 104; const A = { x: FX + 70, y: 34 };
+    const top = toward(lean(0, FX, { elbowL: 0, elbowR: 0 }), A);
+    const bot = squat(50); bot.trunk = r1(bot.trunk * 0.75);
+    flat(bot); ground(bot, FLOOR);
+    bot.root.x = r1(bot.root.x + FX - pts(bot).footR.x);
+    toward(bot, A);
+    add('sling-squat-top', withProps(top, [sling(A)]));
+    add('sling-squat-bottom', withProps(bot, [sling(A)]));
+  }
+  // heel bridge: heels in the foot cradles, knees ~25°, hips lift to a straight line
+  {
+    const down = lie(supine({ hipL: 112, hipR: 112, kneeL: 25, kneeR: 25, ankleL: 10, ankleR: 10 }));
+    ground(down, MAT, ['trunk', 'head']);
+    const P0 = pts(down);
+    let best = null;
+    for (let T = -128; T <= -95; T += 0.5) {
+      for (let h = 80; h <= 150; h += 0.5) {
+        const p = clone(down); p.trunk = T; p.hipL = p.hipR = h;
+        const P = pts(p);
+        p.root.x += P0.neck.x - P.neck.x; p.root.y += P0.neck.y - P.neck.y;
+        const Q = pts(p);
+        const err = Math.hypot(Q.footR.x - P0.footR.x, Q.footR.y - P0.footR.y) + Math.abs(T + 112) * 0.02;
+        if (!best || err < best.err) best = { err, p };
+      }
+    }
+    const up = best.p; up.root.x = r1(up.root.x); up.root.y = r1(up.root.y);
+    const A = { x: r1(P0.footR.x + 14), y: r1(P0.footR.y - 84) };
+    add('sling-heel-bridge-down', withProps(down, ['mat', sling(A, { to: ['footL', 'footR'] })]));
+    add('sling-heel-bridge-up', withProps(up, ['mat', sling(A, { to: ['footL', 'footR'] })]));
+  }
+  // triceps press (facing away from the door): from hands at the forehead to straight arms, body leans in
+  {
+    const FX = 108; const A = { x: FX - 46, y: -4 };
+    const s = lean(34, FX, { shoulderL: 150, shoulderR: 150, elbowL: 112, elbowR: 112 });
+    const e = lean(26, FX, { shoulderL: 148, shoulderR: 148, elbowL: 4, elbowR: 4 });
+    add('sling-triceps-press-start', withProps(s, [sling(A, { behind: true })]));
+    add('sling-triceps-press-end', withProps(e, [sling(A, { behind: true })]));
+  }
+  // incline push-up (facing away from the door): hands stay, chest lowers between the handles
+  {
+    const FX = 96; const A = { x: FX - 40, y: 0 };
+    const up = lean(42, FX, { shoulderL: 50, shoulderR: 50, elbowL: 0, elbowR: 0 });
+    const H = pts(up).handR;
+    const dn = lean(52, FX);
+    aim(dn, 'armR', H, (j2) => j2 > 0);
+    sameArms(dn);
+    add('sling-push-up-up', withProps(up, [sling(A, { behind: true })]));
+    add('sling-push-up-down', withProps(dn, [sling(A, { behind: true })]));
+  }
+  // assisted dip: feet stay on the floor (legs long), hands in the handles beside the hips, small range
+  {
+    const FX = 128;
+    const mk = (T, hip) => { const p = flat(side('standing', { trunk: T, hipL: hip, hipR: hip, kneeL: 0, kneeR: 0, shoulderL: -10, shoulderR: -10, elbowL: 0, elbowR: 0 })); ground(p, FLOOR); p.root.x = r1(p.root.x + FX - pts(p).footR.x); return p; };
+    const upP = mk(-4, 22);
+    const H = pts(upP).handR;
+    const dn = mk(-8, 34);
+    aim(dn, 'armR', { x: H.x, y: H.y }, (j2, el) => el.x < H.x);
+    sameArms(dn);
+    const A = { x: r1(H.x + 30), y: -10 };
+    add('sling-dip-up', withProps(upP, [sling(A, { behind: true, door: false })]));
+    add('sling-dip-down', withProps(dn, [sling(A, { behind: true, door: false })]));
+  }
+}
+
+
+// ================================================================ v5.3: seat split, knee relief, shoulder impingement
+{
+  const withP = (p, props) => { p.props = props; return p; };
+  const handX = (p) => r1(Math.max(pts(p).handL.x, pts(p).handR.x) + 4.5);
+  // support exercises: a wall instead of a chair backrest (no office chair on wheels as support)
+  for (const id of ['calf-raise-down', 'calf-raise-up', 'single-leg-stance', 'star-tap-front', 'hip-ext-standing-start', 'hip-ext-standing-end']) {
+    const p = poses[id];
+    if (!p) continue;
+    const A = id.startsWith('hip-ext') ? poses['hip-ext-standing-start'] : id.startsWith('calf') ? poses['calf-raise-down'] : p;
+    p.props = [{ type: 'wall', x: handX(A), facing: -1 }];
+  }
+  for (const id of ['leg-swing-side-out', 'leg-swing-side-in', 'hip-abd-standing-start', 'hip-abd-standing-end']) if (poses[id]) poses[id].props = ['wall'];
+  // box squat to the bed edge: same movement as sit-to-stand, a low box/bed edge instead of the chair
+  for (const [id, src] of [['box-sit', 'sit-chair'], ['box-sit-mid', 'sit-to-stand-mid'], ['box-sit-end', 'sit-to-stand-end']]) {
+    const q = clone(poses[src]);
+    q.props = [{ type: 'chair', x: chairX, y: SEAT, facing: 1, back: false }];
+    add(id, q);
+  }
+  // heel bridge on a step (knees 20–30° bent, heels on the step)
+  {
+    const p = lie(supine({}));
+    const STEP_TOP = FLOOR - STEP_H;
+    for (const s2 of ['L', 'R']) {
+      p['knee' + s2] = 22;
+      solve(p, 'hip' + s2, 95, 175, (q) => pts(q)['foot' + s2].y + 4.25 - STEP_TOP);
+      p['ankle' + s2] = 0;
+    }
+    const step = { type: 'step', x: r1(pts(p).footR.x + 6), w: 34, top: STEP_TOP };
+    p.props = ['mat', step];
+    add('bridge-heel-step-down', p);
+    const P0 = pts(p);
+    let best = null;
+    for (let T = -130; T <= -91; T += 0.25) {
+      for (let k = 10; k <= 30; k += 0.25) {
+        const q = clone(p); q.trunk = T; q.hipR = q.hipL = -T; q.kneeR = q.kneeL = k;
+        const P = pts(q); q.root.x += P0.neck.x - P.neck.x; q.root.y += P0.neck.y - P.neck.y;
+        const Q = pts(q);
+        const err = Math.hypot(Q.footR.x - P0.footR.x, Q.footR.y - P0.footR.y);
+        if (!best || err < best.err) best = { err, q };
+      }
+    }
+    best.q.root.x = r1(best.q.root.x); best.q.root.y = r1(best.q.root.y);
+    add('bridge-heel-step-up', best.q);
+  }
+  // thoracic extension on the floor over a towel roll (arms crossed on the chest)
+  {
+    const a = lie(supine({ hipL: 140, hipR: 140, kneeL: 100, kneeR: 100, shoulderL: 100, shoulderR: 100, elbowL: 0, elbowR: 0 }));
+    ground(a, MAT, ['legL', 'legR', 'trunk']);
+    flat(a);
+    const P = pts(a);
+    const towel = { type: 'towel', x: r1(P.hip.x + (P.neck.x - P.hip.x) * 0.7), y: r1(MAT - 5), r: 5 };
+    a.props = ['mat', towel];
+    add('supine-towel-tspine-a', a);
+    const b = clone(a); b.headTilt = -6; ground(b, MAT, ['trunk', 'head', 'legL', 'legR']);
+    add('supine-towel-tspine-b', b);
+  }
+  // long-sit row with a band anchored low at the door (arms below shoulder height)
+  {
+    const s0 = side('sitting', { trunk: 0, hipL: 90, hipR: 90, kneeL: 6, kneeR: 6, shoulderL: 52, shoulderR: 52, elbowL: 0, elbowR: 0 });
+    ground(s0, MAT, ['trunk', 'legL', 'legR']);
+    const door = { type: 'door', x: r1(pts(s0).footR.x + 30), y: r1(pts(s0).handR.y + 6) };
+    s0.props = ['mat', door];
+    add('long-sit-row-start', s0);
+    const e = clone(s0); e.trunk = -4; e.shoulderL = e.shoulderR = -30; e.elbowL = e.elbowR = 100;
+    add('long-sit-row-end', e);
+  }
+  // long sitting, both hands at the left thigh (massage stick / hands) – mirrored like the patella poses
+  {
+    const mk = (u) => {
+      const p = side('sitting', { trunk: 30, headTilt: 14, hipL: 90, kneeL: 0, hipR: 105, kneeR: 30, ankleL: -6 });
+      ground(p, MAT, ['trunk', 'legL']);
+      solve(p, 'hipR', 92, 150, (q) => pts(q).footR.y + 4.25 - MAT);
+      flat(p, 'R');
+      const P = pts(p);
+      aim(p, 'armR', { x: P.hipJL.x + (P.kneeL.x - P.hipJL.x) * u, y: P.hipJL.y + (P.kneeL.y - P.hipJL.y) * u - 7 }, (j2) => j2 >= 0);
+      p.props = ['mat'];
+      return sameArms(p);
+    };
+    add('long-sit-thigh-a', mk(0.35));
+    add('long-sit-thigh-b', mk(0.78));
+  }
+  // prone quad lengthening with a band around the left foot (knee only to ~60–70°)
+  {
+    const mk = (k) => {
+      const p = ground(side('lying', { root: { x: 90, y: 100 }, trunk: 90, hipL: -90, hipR: -90, kneeL: k, kneeR: 0, shoulderL: -90, shoulderR: -90, elbowL: 0, elbowR: 0, ankleL: 90, ankleR: 90 }), MAT, ['trunk', 'legR']);
+      p.props = ['mat'];
+      return p;
+    };
+    add('prone-quad-band-a', mk(45));
+    add('prone-quad-band-b', mk(65));
+  }
+  // scapula setting: shoulders relaxed → blades back and down (small retraction)
+  {
+    const a = clone(stand); a.shoulderL = a.shoulderR = 4; a.elbowL = a.elbowR = 12;
+    add('stand-scap-relaxed', a);
+    const b = clone(a); b.reachL = b.reachR = -4; b.trunk = -1; b.shoulderL = b.shoulderR = -6;
+    add('stand-scap-set', b);
+  }
+  // serratus punch low (≈ 55°), band anchored behind
+  {
+    const mk = (sh, el, reach) => { const p = flat(side('standing', { hipL: 10, hipR: -10, kneeL: 8, kneeR: 8, shoulderR: sh, elbowR: el, shoulderL: 5, elbowL: 15 })); ground(p, FLOOR); p.reachR = reach; p.props = [{ type: 'door', x: 12, y: 80 }]; return p; };
+    add('stand-punch-low-bent', mk(50, 45, 0));
+    add('stand-punch-low-reach', mk(55, 0, 5));
+  }
+  // wall push-up plus: hands on the wall at lower chest height, body leans in; plus = shoulder blades apart
+  {
+    const lean = (T, sh, el, reach) => { const p = flat(side('standing', { trunk: T, hipL: -T, hipR: -T, kneeL: 0, kneeR: 0, shoulderL: sh, shoulderR: sh, elbowL: el, elbowR: el })); ground(p, FLOOR); p.reachL = p.reachR = reach; return p; };
+    const a = lean(14, 62, 0, 3);
+    const wx = handX(a);
+    a.props = [{ type: 'wall', x: wx, facing: -1 }];
+    add('wall-push-up-plus-a', a);
+    const b = lean(22, 48, 70, 0);
+    const H = pts(a).handR;
+    aim(b, 'armR', H, (j2) => j2 > 0); sameArms(b);
+    b.root.x = a.root.x; b.props = a.props;
+    add('wall-push-up-plus-b', b);
+  }
+  // low row with band (arms from ≈ 35° forward to beside the hips), band anchored at hip height
+  {
+    const a = flat(side('standing', { hipL: 4, hipR: -4, kneeL: 8, kneeR: 8, shoulderL: 35, shoulderR: 35, elbowL: 0, elbowR: 0 }));
+    ground(a, FLOOR);
+    const door = { type: 'door', x: r1(pts(a).handR.x + 55), y: r1(pts(a).handR.y) };
+    a.props = [door];
+    add('stand-low-row-start', a);
+    const b = clone(a); b.shoulderL = b.shoulderR = -18; b.elbowL = b.elbowR = 0; b.reachL = b.reachR = -3;
+    add('stand-low-row-end', b);
+  }
+  // pull-apart low (chest to belly height, front view): arms forward-down → apart at ≈ 50°
+  add('front-arms-forward-low', ground(front('standing', { shoulderL: 18, shoulderR: 18, upperArmLenL: 0.55, upperArmLenR: 0.55, forearmLenL: 0.55, forearmLenR: 0.55, elbowL: 0, elbowR: 0 }), FLOOR));
+  add('front-arms-apart-low', ground(front('standing', { shoulderL: 50, shoulderR: 50, elbowL: 0, elbowR: 0 }), FLOOR));
+  // low face pull at chest height: arms forward ≈ 55° → elbows back below shoulder height, forearms up (external rotation)
+  add('low-face-pull-start', ground(side('standing', { trunk: -2, shoulderL: 55, shoulderR: 55, elbowL: 0, elbowR: 0, hipL: -8, hipR: 8 }), FLOOR));
+  add('low-face-pull-end', ground(side('standing', { trunk: -2, shoulderL: -30, shoulderR: -30, elbowL: -150, elbowR: -150, upperArmLenL: 0.7, upperArmLenR: 0.7, hipL: -8, hipR: 8 }), FLOOR));
+  // rotator cuff isometrics at the door frame (front view, elbow at the side, forearm forward)
+  {
+    const a = clone(poses['er0-start']);
+    const P = pts(a);
+    a.props = [{ type: 'towel', x: r1(P.elbowR.x + 5.5), y: r1(P.elbowR.y - 2), r: 3.6 }, { type: 'wall', x: r1(P.handR.x - 5) }];
+    add('front-rc-iso', a);
+  }
+  // chest opening low: hands behind the back, shoulder blades together
+  {
+    const a = clone(stand); a.shoulderL = a.shoulderR = -8; a.elbowL = a.elbowR = 10;
+    add('stand-hands-behind-a', a);
+    const b = clone(a); b.shoulderL = b.shoulderR = -32; b.elbowL = b.elbowR = 0; b.reachL = b.reachR = -4; b.headTilt = -6;
+    add('stand-hands-behind-b', b);
+  }
+  // seated side bend without the arm overhead (hand slides down the thigh), neck stretch with the arms down
+  {
+    const mk = (o = {}) => ground(front('sitting', { hipL: 80, hipR: 80, thighLenL: 0.25, thighLenR: 0.25, kneeL: 80, kneeR: 80, shoulderL: 14, shoulderR: 14, elbowL: -25, elbowR: -25, props: [{ type: 'chair' }], ...o }), FLOOR, ['legL', 'legR']);
+    add('front-sit-side-bend-low', mk({ trunk: 14, shoulderR: 30, elbowR: 0, shoulderL: 8, elbowL: 0, headTilt: 6 }));
+    add('front-sit-neck-low', mk({ headTilt: -38, shoulderL: 10, elbowL: 0, shoulderR: 6, elbowR: 0 }));
+  }
+}
+
+// ================================================================ v5.3 figure audit: views, walls, top view, close-ups
+// (used via data/figure-overrides.json – merged over exercise.figure, see js/components/pt-figure.js header)
+{
+  const withP = (p, props) => { p.props = props; return p; };
+  const wallAt = (x, extra = {}) => ({ type: 'wall', x: r1(x), facing: -1, ...extra });
+  const PLANE = { type: 'wall', plane: true };
+
+  // ---- standing hip extension: the hands stay on the wall while the leg goes back
+  {
+    const a = poses['hip-ext-standing-start'];
+    const b = poses['hip-ext-standing-end'];
+    const H = pts(a).handR;
+    aim(b, 'armR', H, (j2) => j2 >= 0); sameArms(b);
+    add('hip-ext-standing-end', b);
+  }
+  // ---- wall slide (facing the wall): the forearms stay on the wall while sliding up
+  {
+    const lo = poses['stand-wall-slide-low'];
+    const hi = poses['stand-wall-slide-high'];
+    const wx = lo.props[0].x;
+    const Q = pts(hi);
+    aim(hi, 'armR', { x: wx - 4.5, y: Q.neck.y - 42 }, (j2) => j2 >= 0); sameArms(hi);
+    add('stand-wall-slide-high', hi);
+  }
+  // ---- wall mini squat: facing the wall, fingertips lightly on the wall, hips back to ≈ 45°
+  {
+    const a = flat(side('standing', { trunk: 0, shoulderL: 50, shoulderR: 50, elbowL: 10, elbowR: 10 }));
+    ground(a, FLOOR);
+    const H = pts(a).handR;
+    const wall = wallAt(H.x + 4.5);
+    a.props = [wall];
+    add('wall-mini-squat-a', a);
+    const b = squat(45);
+    b.root.x = r1(b.root.x + pts(a).footR.x - pts(b).footR.x);
+    aim(b, 'armR', { x: H.x, y: H.y + 14 }, (j2) => j2 >= 0); sameArms(b);
+    b.props = [wall];
+    add('wall-mini-squat-b', b);
+  }
+  // ---- calf raise facing the wall, hands on the wall at chest height
+  {
+    const mk = (ank) => {
+      const p = side('standing', { trunk: 2, ankleL: ank, ankleR: ank });
+      ground(p, FLOOR);
+      return p;
+    };
+    const a = mk(0);
+    const P = pts(a);
+    const wx = r1(P.hip.x + 30);
+    const hand = { x: wx - 4.5, y: P.neck.y + 24 };
+    aim(a, 'armR', hand, (j2, e) => e.y > P.neck.y); sameArms(a);
+    a.props = [wallAt(wx)];
+    add('wall-calf-raise-down', a);
+    const b = mk(40);
+    const Q = pts(b);
+    aim(b, 'armR', { x: hand.x, y: hand.y + (Q.neck.y - P.neck.y) }, (j2, e) => e.y > Q.neck.y); sameArms(b);
+    b.props = a.props;
+    add('wall-calf-raise-up', b);
+  }
+  // ---- single-leg stance beside a wall (front view): left hand on the wall, right foot lifts
+  {
+    const mk = (lift) => {
+      const p = front('standing', { hipL: 3, hipR: lift ? 4 : 4, kneeR: lift ? 4 : 0, thighLenR: lift ? 0.45 : 1, shoulderR: 14, elbowR: 0 });
+      ground(p, FLOOR, ['legL']);
+      return p;
+    };
+    const a = mk(false);
+    const P = pts(a);
+    const wx = r1(P.hipJL.x + 34);
+    aim(a, 'armL', { x: wx - 4, y: P.hip.y - 10 }, (j2, e) => e.y > P.shoulderL.y);
+    a.props = [{ type: 'wall', x: wx, facing: -1 }];
+    add('front-wall-stand', a);
+    const b = mk(true);
+    b.root.x = a.root.x;
+    const Q = pts(b);
+    aim(b, 'armL', { x: wx - 4, y: Q.hip.y - 10 }, (j2, e) => e.y > Q.shoulderL.y);
+    b.props = a.props;
+    add('front-wall-single-leg', b);
+  }
+  // ---- standing hip abduction beside the door frame (front view): left hand on the frame, band low at the frame
+  {
+    const mk = (abd) => {
+      const p = front('standing', { hipL: 3, hipR: abd, thighLenL: 0.99, trunk: abd * 0.1 });
+      ground(p, FLOOR, ['legL']);
+      return handsOnHips(p, ['R']);
+    };
+    const a = mk(3);
+    const P = pts(a);
+    const fx = r1(P.hipJL.x + 26);
+    const door = { type: 'door', x: fx, y: FLOOR - 9 };
+    const hold = (p) => { const Q = pts(p); aim(p, 'armL', { x: fx - 4, y: Q.hip.y - 2 }, (j2, e) => e.y > Q.shoulderL.y); p.props = [door]; return p; };
+    add('front-hip-abd-door-a', hold(a));
+    const b = mk(28); b.root.x = r1(b.root.x + P.footL.x - pts(b).footL.x);
+    add('front-hip-abd-door-b', hold(b));
+  }
+  // ---- side plank at the wall (front view): hips sag toward the wall → lift to a straight line
+  {
+    const st = poses['front-side-plank-wall'];
+    const P0 = pts(st);
+    let best = null;
+    for (let T = -40; T <= -22; T += 0.5) {
+      for (let g = 6; g <= 16; g += 0.5) {
+        const q = clone(st); q.trunk = T; q.hipL = g; q.hipR = -g;
+        const Q = pts(q);
+        q.root.x += P0.feet.x - Q.feet.x; q.root.y += P0.feet.y - Q.feet.y;
+        const R = pts(q);
+        const err = Math.abs(R.elbowR.x - P0.elbowR.x) * 2 + Math.abs(R.elbowR.y - P0.elbowR.y) * 0.3;
+        if (!best || err < best.err) best = { err, q };
+      }
+    }
+    const sag = best.q;
+    sag.root.x = r1(sag.root.x); sag.root.y = r1(sag.root.y);
+    { const Q = pts(sag); aim(sag, 'armL', { x: Q.hipJL.x + 2, y: Q.hipJL.y - 4 }, (e) => e < 0); }
+    sag.props = st.props;
+    add('front-side-plank-wall-sag', sag);
+  }
+  // ---- wall plane beside the figure (side view): far hand rests on the wall behind
+  const sideWall = (id, src, arm = { shoulderL: 35, elbowL: 25, upperArmLenL: 0.55, forearmLenL: 0.6 }) => alias(id, src, (p) => { Object.assign(p, arm); p.props = [PLANE]; });
+  sideWall('leg-swing-wall-a', 'leg-swing-front-a', { shoulderL: 40, elbowL: 20, upperArmLenL: 0.55, forearmLenL: 0.6, shoulderR: 8, elbowR: 15 });
+  sideWall('leg-swing-wall-b', 'leg-swing-front-b', { shoulderL: 40, elbowL: 20, upperArmLenL: 0.55, forearmLenL: 0.6, shoulderR: 8, elbowR: 15 });
+  sideWall('hip-flexor-wall-a', 'stand-hip-flexor-stagger');
+  sideWall('hip-flexor-wall-b', 'stand-hip-flexor-stretch');
+  // ---- leg swing sideways facing the wall (front view, wall in front = background), both hands on the wall
+  {
+    const mk = (abd) => {
+      const p = front('standing', { hipL: 2, hipR: abd, kneeL: 0, kneeR: 0, shoulderL: 24, shoulderR: 24, elbowL: 40, elbowR: 40, upperArmLenL: 0.55, upperArmLenR: 0.55, forearmLenL: 0.55, forearmLenR: 0.55 });
+      ground(p, FLOOR, ['legL']);
+      p.props = [{ type: 'wall' }];
+      return p;
+    };
+    const a = mk(26); const b = mk(-10); b.root.x = a.root.x;
+    add('leg-swing-wall-side-out', a);
+    add('leg-swing-wall-side-in', b);
+  }
+  // ---- bow arm against the wall (front view, shooting stance, bow arm to the viewer's right)
+  {
+    const p = ground(front('standing', { hipL: 7, hipR: 7, shoulderL: 88, elbowL: 0, shoulderR: 10, elbowR: 0 }), FLOOR);
+    p.props = [{ type: 'wall', x: r1(pts(p).handL.x + 4.5), facing: -1 }];
+    add('front-bow-arm-wall', p);
+    // push-pull isometric: bow hand at the door frame, band from the frame to the draw hand at the anchor
+    const q = clone(poses['mirror-draw-end']);
+    const H = pts(q).handL;
+    q.props = [{ type: 'door', x: r1(H.x + 5), y: r1(H.y) }];
+    add('front-push-pull-iso', q);
+  }
+  // ---- breathing: supine, hands on the belly
+  {
+    const p = lie(supine({ shoulderL: 90, shoulderR: 90, upperArmLenL: 0.7, upperArmLenR: 0.7, elbowL: 24, elbowR: 24 }));
+    p.props = ['mat'];
+    add('supine-hands-belly', p);
+  }
+  // ---- chairs against the wall (sit-to-stand, chair dips): same poses, wall behind the backrest
+  for (const [id, src] of [['sit-chair-wall', 'sit-chair'], ['sit-to-stand-mid-wall', 'sit-to-stand-mid'], ['sit-to-stand-end-wall', 'sit-to-stand-end'], ['chair-dip-up-wall', 'chair-dip-up'], ['chair-dip-down-wall', 'chair-dip-down']]) {
+    alias(id, src, (p) => { const ch = p.props.find((x) => x.type === 'chair'); p.props = [...p.props, { type: 'wall', x: r1(ch.x - 16 * ch.facing - 5), facing: 1 }]; });
+  }
+
+  // ---------------------------------------------------------------- top view (standing, seen from above)
+  // facing the viewer (face 0): the right arm is on the viewer's left. Forearm angle: + = outward (external rotation).
+  const topStand = (o = {}) => ({ view: 'front', ground: 'standing', camera: 'above', root: { x: 100, y: 80 }, face: 0, trunk: 0, hipL: 6, hipR: 6, kneeL: 0, kneeR: 0, shoulderL: 8, shoulderR: 8, elbowL: 10, elbowR: 10, upperArmLenL: 0.18, upperArmLenR: 0.18, forearmLenL: 0.3, forearmLenR: 0.3, ...o });
+  const er = (fore) => topStand({ shoulderR: 12, elbowR: fore, forearmLenR: 1 });
+  {
+    const a = er(-62); const b = er(55);
+    const E = pts(a).elbowR;
+    const towel = { type: 'towel', x: r1(E.x + 4), y: r1(E.y), r: 3.4 };
+    const H = pts(a).handR;
+    // ER: band from the door at the person's left (viewer's right); IR: door at the person's right
+    const doorL = { type: 'door', x: r1(H.x + 52), y: r1(H.y + 4) };
+    add('top-er-in', withP(clone(a), [towel, doorL]));
+    add('top-er-out', withP(clone(b), [towel, doorL]));
+    const H2 = pts(b).handR;
+    const doorR = { type: 'door', x: r1(H2.x - 40), y: r1(H2.y + 4) };
+    add('top-ir-out', withP(clone(b), [towel, doorR]));
+    add('top-ir-in', withP(clone(a), [towel, doorR]));
+    // isometrics at the door frame: forearm forward, back of the hand (ER) / palm (IR) against the frame
+    const n = er(0);
+    const Hn = pts(n).handR;
+    add('top-er-iso', withP(clone(n), [towel, { type: 'door', x: r1(Hn.x - 7.5), y: r1(Hn.y - 6), knot: false }]));
+    add('top-ir-iso', withP(clone(n), [towel, { type: 'door', x: r1(Hn.x + 7.5), y: r1(Hn.y - 6), knot: false }]));
+  }
+  // pallof press from above: hands at the sternum → arms straight forward; band from the door at the side
+  {
+    const a = topStand({ shoulderL: -10, shoulderR: -10, upperArmLenL: 0.5, upperArmLenR: 0.5, elbowL: -42, elbowR: -42, forearmLenL: 0.8, forearmLenR: 0.8 });
+    const b = topStand({ shoulderL: -14, shoulderR: -14, upperArmLenL: 1, upperArmLenR: 1, elbowL: -14, elbowR: -14, forearmLenL: 1, forearmLenR: 1 });
+    const H = pts(a).hands;
+    const door = { type: 'door', x: r1(H.x + 66), y: r1(H.y) };
+    add('top-pallof-in', withP(a, [door]));
+    add('top-pallof-out', withP(b, [door]));
+  }
+
+  // ---- seated chest stretch, front view: hands behind the head, elbows forward → open to the sides
+  {
+    const mk = (open) => {
+      const p = ground(front('sitting', { hipL: 80, hipR: 80, thighLenL: 0.25, thighLenR: 0.25, kneeL: 80, kneeR: 80, upperArmLenL: open ? 1 : 0.45, upperArmLenR: open ? 1 : 0.45, props: [{ type: 'chair' }] }), FLOOR, ['legL', 'legR']);
+      const P = pts(p);
+      for (const s2 of ['L', 'R']) {
+        const sg = s2 === 'L' ? 1 : -1;
+        aim(p, 'arm' + s2, { x: P.head.x + sg * 3, y: P.head.y + 1 }, (j2, e) => sg * (e.x - P['shoulder' + s2].x) > (open ? 4 : -1) && e.y < P.neck.y);
+      }
+      return p;
+    };
+    add('front-sit-hands-head-in', mk(false));
+    add('front-sit-hands-head-out', mk(true));
+  }
+
+  // ---------------------------------------------------------------- close-up: left knee from above (patella glides)
+  const knee = (o = {}) => ({ view: 'front', ground: 'lying', camera: 'above', closeup: 'knee', root: { x: 100, y: 100 }, trunk: 0, hipL: 0, hipR: 0, kneeL: 0, kneeR: 0, shoulderL: 0, shoulderR: 0, elbowL: 0, elbowR: 0, patellaX: 0, patellaY: 0, gripX: -9, ...o });
+  add('knee-closeup-rest', knee());
+  add('knee-closeup-down', knee({ patellaX: 8 }));
+}
+
+// lying with the neck lower than the hips (bridges): tilt the head back to the mat
+for (const p of Object.values(poses)) {
+  if (p.view === 'side' && p.ground === 'lying' && p.trunk < -92) p.headTilt = r1(-90 - p.trunk);
+}
+
+const out = { version: 1, segments: { trunk: 50, thigh: 42, shin: 42, upperArm: 30, forearm: 28, head: 10, foot: 10 }, poses };
+writeFileSync(`${repo}/data/poses.json`, formatJson(out));
+console.log(Object.keys(poses).length, 'poses');
+
+function formatJson(o) {
+  const lines = Object.entries(o.poses).map(([id, p]) => `    ${JSON.stringify(id)}: ${JSON.stringify(p)}`);
+  return `{\n  "version": 1,\n  "segments": ${JSON.stringify(o.segments)},\n  "poses": {\n${lines.join(',\n')}\n  }\n}\n`;
+}
