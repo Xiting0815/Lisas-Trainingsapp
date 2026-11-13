@@ -26,7 +26,7 @@ Vanilla JS mit ES-Modulen, kein Build.
 
 ```
 npm test                      # alle Tests (Logik, Daten, E2E im iPhone-Viewport)
-npm start                     # lokaler Server (Pfad / → http://localhost:8000)
+npm start                     # lokaler Server, App unter http://localhost:8000/ (Pfad-Prüfung: tests/helpers/static-server.js)
 node tools/gen-precache.mjs   # nach jeder Änderung an Dateien: Service-Worker-Precache neu erzeugen
 node tools/gen-precache.mjs --check
 ```

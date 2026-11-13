@@ -2,7 +2,7 @@
   "name": "lisas-trainingsapp",
   "private": true,
   "version": "0.1.0",
-  "description": "Offline-PWA Trainingsbegleiter (Knie-Prehab + Bogenschießen). Keine Abhängigkeiten, kein Build.",
+  "description": "Offline-PWA Trainingsbegleiter für Nacken, Schultern und oberen Rücken. Keine Abhängigkeiten, kein Build.",
   "type": "module",
   "scripts": {
     "test": "node --test",
