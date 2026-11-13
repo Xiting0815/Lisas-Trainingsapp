@@ -108,7 +108,7 @@ function pick({ pool, n, require = [], avoid, used, lastUsed, rng }) {
 
 /** Pool einer Rolle für ein Level; bei zu wenigen Treffern werden die nächstliegenden Level-Bereiche ergänzt. */
 function poolFor(exercises, role, level, need) {
-  const all = exercises.filter((e) => e.role === role);
+  const all = exercises.filter((e) => e.role === role && !e.rowWarmup);
   const exact = all.filter((e) => inRange(e, level));
   if (exact.length >= need) return exact;
   const rest = all.filter((e) => !exact.includes(e)).sort((a, b) => rangeDistance(a, level) - rangeDistance(b, level));

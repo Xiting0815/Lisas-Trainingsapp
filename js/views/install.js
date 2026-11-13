@@ -39,7 +39,7 @@ const ILL_HOME = `<svg class="ill" viewBox="0 0 300 200" aria-hidden="true" focu
   <rect class="ill-row" x="98" y="100" width="104" height="24" rx="8"/><text class="ill-text" x="108" y="117">Lesezeichen</text>
   <rect class="ill-row is-hl" x="98" y="128" width="104" height="28" rx="8"/>
   <rect class="ill-plus" x="104" y="133" width="18" height="18" rx="4"/><path class="ill-plus-mark" d="M113 137v10M108 142h10"/>
-  <text class="ill-text is-hl" x="128" y="147">Zum Home-Bildschirm</text>
+  <text class="ill-text is-hl" style="font-size:8.5px" x="126" y="146">Zum Home-Bildschirm</text>
   <rect class="ill-ring" x="94" y="124" width="112" height="36" rx="12"/>
   <rect class="ill-row" x="98" y="162" width="104" height="22" rx="8"/><text class="ill-text" x="108" y="177">Suchen</text>
 </svg>`;

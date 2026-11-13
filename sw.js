@@ -12,7 +12,7 @@
 // App-Dateien ausführen; `--check` prüft, ob alles aktuell ist.
 
 // <precache-version>
-const CACHE_VERSION = 'dd41e98223';
+const CACHE_VERSION = '97f760909b';
 // </precache-version>
 const CACHE_PREFIX = 'lisa-';
 const CACHE_NAME = `${CACHE_PREFIX}${CACHE_VERSION}`;

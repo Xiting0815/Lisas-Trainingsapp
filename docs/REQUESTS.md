@@ -23,3 +23,10 @@
 - **`content.js`:** `loadContent()`, `buildContent(raw)`, `loadContentSync(raw)`, `_setContent(c)`, `getContent()`, `getExercise(id)`, `getPose(id)`; `content.byId` ist eine `Map`. `tests/helpers/content-node.js`: `readContentFromDisk({install})` und `readRawFromDisk()`.
 - **Precache (UI):** `data/routines.json` und `data/tips.json` sind neue Dateien; `data/workouts|phases|badges|equipment.json` gibt es nicht mehr.
 - **Pflege der Texte:** Es gibt kein separates Text-Skript mehr (`tools/exercise-texts.mjs` ist gelöscht). Texte direkt in `data/exercises.json` bearbeiten; `node --test tests/data.test.js` prüft Pflichtfelder, verbotene Wörter, Platzhalter und die Abdeckung. Posen: `node tools/gen-poses.mjs <repo>` (erzeugt `data/poses.json` und behält nur Posen, die eine Übung oder ein Override nennt).
+
+## UI → DATA / LOGIC
+
+- **DATA (optional):** Übungen vom Typ `timed` mit `role:'atmung'` dürfen `breath:{inhale,hold,exhale}` tragen; die UI nutzt derzeit nur `cueWords` (Atem-Phasen „Einatmen/Halten/Ausatmen“ kämen sonst von `cues.js`, falls LOGIC sie ergänzt).
+- **DATA:** `tests/figure-v2.test.js` prüft noch das alte Highlight-Verhalten (Knie/Bogen); `figureSpecForExercise` in `pt-figure.js` kennt jetzt nur noch `figure.highlight`. Außerdem melden `figure*.test.js` noch Knie-Posen („child-out below the floor“) – bitte mit den Figuren bereinigen.
+- **UI-Annahmen:** Exercises haben `steps[]`, `short`, `setup`, `feel`, optional `instructions[]`, `mistakes[]`, `warn`, `gear`. Content hat `byId`, `routines`, `tips[{icon,title,text}]`, `quotes[]`.
+- **Test-Hook:** `globalThis.__lisaSpeed = N` (vor dem Laden gesetzt) beschleunigt den Timer in E2E-Tests.
